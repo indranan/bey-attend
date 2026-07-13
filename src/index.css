@@ -1,0 +1,19 @@
+@import "tailwindcss";
+
+@theme {
+  /* Custom Google Material Design Colors */
+  --color-primary: #1a73e8;
+  --color-secondary: #f8f9fa;
+  --color-dark-bg: #121212;
+  --color-dark-card: #1e1e1e;
+  
+  --radius-xl: 1.5rem;
+  --radius-2xl: 2rem;
+}
+
+/* Base Style untuk smooth transition dark mode */
+@layer base {
+  body {
+    @apply transition-colors duration-300;
+  }
+}
