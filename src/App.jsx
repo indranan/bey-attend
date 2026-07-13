@@ -18,54 +18,56 @@ const CreateEventModal = ({ show, onClose, form, setForm, onSubmit, isSubmitting
     {show && (
       <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
         <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
+          initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
           onClick={onClose}
           className="absolute inset-0 bg-black/60 backdrop-blur-sm"
         />
+
         <motion.div
           initial={{ scale: 0.9, opacity: 0, y: 20 }}
           animate={{ scale: 1, opacity: 1, y: 0 }}
           exit={{ scale: 0.9, opacity: 0, y: 20 }}
           className="relative w-full max-w-sm bg-white dark:bg-dark-card rounded-[2.5rem] p-8 shadow-2xl border border-gray-100 dark:border-gray-800"
         >
-          <div className="text-center mb-6">
-            <div className="w-12 h-12 bg-primary/10 rounded-2xl flex items-center justify-center mx-auto mb-3">
-              <MapPin className="text-primary" size={24} />
-            </div>
-            <h3 className="text-xl font-black italic uppercase tracking-tighter dark:text-white">New Arena Event</h3>
-            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1">Konfigurasi Turnamen</p>
-          </div>
-
           <div className="space-y-4">
+            <div className="text-center mb-6">
+              <h3 className="text-xl font-black italic uppercase tracking-tighter text-gray-900 dark:text-white leading-none">
+                New Arena Event
+              </h3>
+              <p className="text-[10px] text-gray-500 dark:text-gray-400 font-bold uppercase tracking-widest mt-2 italic">
+                Konfigurasi Turnamen
+              </p>
+            </div>
+
             <div>
               <label className="text-[10px] font-black text-primary uppercase ml-2 mb-1 block italic tracking-widest">Nama Event</label>
               <input
                 type="text"
                 placeholder="Contoh: Liga Beyblade X"
-                className="w-full p-4 bg-gray-50 dark:bg-gray-800 rounded-2xl font-bold outline-none border-2 border-transparent focus:border-primary dark:text-white transition-all"
+                className="w-full p-4 bg-gray-100 dark:bg-gray-800 rounded-2xl font-bold outline-none border-2 border-transparent focus:border-primary text-gray-900 dark:text-white transition-all"
                 value={form.nama}
                 onChange={(e) => setForm({ ...form, nama: e.target.value })}
                 autoComplete="off"
               />
             </div>
+
             <div>
               <label className="text-[10px] font-black text-primary uppercase ml-2 mb-1 block italic tracking-widest">Lokasi</label>
               <input
                 type="text"
                 placeholder="Contoh: Arena Pasar Tingkat"
-                className="w-full p-4 bg-gray-50 dark:bg-gray-800 rounded-2xl font-bold outline-none border-2 border-transparent focus:border-primary dark:text-white transition-all"
+                className="w-full p-4 bg-gray-100 dark:bg-gray-800 rounded-2xl font-bold outline-none border-2 border-transparent focus:border-primary text-gray-900 dark:text-white transition-all"
                 value={form.lokasi}
                 onChange={(e) => setForm({ ...form, lokasi: e.target.value })}
                 autoComplete="off"
               />
             </div>
+
             <div className="flex gap-3 pt-4">
               <button
                 type="button"
                 onClick={onClose}
-                className="flex-1 py-4 bg-gray-100 dark:bg-gray-800 text-gray-400 rounded-2xl font-black uppercase italic text-xs active:scale-95 transition-all"
+                className="flex-1 py-4 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-2xl font-black uppercase italic text-xs active:scale-95 transition-all"
               >
                 Batal
               </button>
@@ -73,7 +75,7 @@ const CreateEventModal = ({ show, onClose, form, setForm, onSubmit, isSubmitting
                 type="button"
                 onClick={onSubmit}
                 disabled={isSubmitting || !form.nama || !form.lokasi}
-                className="flex-1 py-4 bg-primary text-white rounded-2xl font-black uppercase italic text-xs shadow-lg shadow-primary/30 active:scale-95 transition-all disabled:opacity-50"
+                className="flex-1 py-4 bg-primary dark:text-white rounded-2xl font-black uppercase italic text-xs shadow-lg shadow-primary/30 active:scale-95 transition-all disabled:opacity-50"
               >
                 {isSubmitting ? <Loader2 className="animate-spin mx-auto" size={16} /> : "Aktifkan"}
               </button>
@@ -271,7 +273,7 @@ export default function App() {
 
     if (!Array.isArray(leaderboard) || leaderboard.length === 0) {
       return (
-        <div className="text-center p-12 bg-white dark:bg-dark-card rounded-[2.5rem] border border-gray-800 text-white">
+        <div className="text-center p-12 bg-white dark:bg-dark-card rounded-[2.5rem] border border-gray-800 dark:text-white">
           <Trophy className="text-gray-700 mx-auto mb-4 opacity-20" size={48} />
           <p className="text-gray-500 font-black uppercase italic tracking-widest text-xs">Klasemen Belum Tersedia</p>
         </div>
@@ -281,8 +283,8 @@ export default function App() {
     return (
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6 pb-20">
         <div className="text-center">
-          <h2 className="text-2xl font-black italic uppercase tracking-tighter dark:text-white leading-none text-white">KLASEMEN LIGA</h2>
-          <p className="text-[10px] text-primary font-black uppercase tracking-[0.3em] mt-2 italic text-white">Peringkat Blader Season Ini</p>
+          <h2 className="text-2xl font-black italic uppercase tracking-tighter dark:text-white leading-none dark:text-white">KLASEMEN LIGA</h2>
+          <p className="text-[10px] text-primary font-black uppercase tracking-[0.3em] mt-2 italic dark:text-white">Peringkat Blader Season Ini</p>
         </div>
         <div className="bg-white dark:bg-dark-card rounded-[2.5rem] overflow-hidden border border-gray-100 dark:border-gray-800 shadow-2xl">
           <table className="w-full text-left border-collapse">
@@ -302,7 +304,7 @@ export default function App() {
                   <tr key={index} className={`${isMe ? 'bg-primary/10' : ''} transition-colors`}>
                     <td className="p-4">
                       <div className="flex flex-col items-center gap-1">
-                        <div className={`w-7 h-7 rounded-xl flex items-center justify-center text-xs font-black shadow-sm ${rank === 1 ? 'bg-yellow-400 text-black shadow-yellow-400/40' : rank === 2 ? 'bg-gray-300 text-black' : rank === 3 ? 'bg-orange-500 text-white' : 'bg-gray-100 dark:bg-gray-800 text-gray-400'}`}>{rank}</div>
+                        <div className={`w-7 h-7 rounded-xl flex items-center justify-center text-xs font-black shadow-sm ${rank === 1 ? 'bg-yellow-400 text-black shadow-yellow-400/40' : rank === 2 ? 'bg-gray-300 text-black' : rank === 3 ? 'bg-orange-500 dark:text-white' : 'bg-gray-100 dark:bg-gray-800 text-gray-400'}`}>{rank}</div>
                         {getStatusIcon(item.status)}
                       </div>
                     </td>
@@ -327,20 +329,20 @@ export default function App() {
   const AdminContent = () => (
     <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-6 pb-20">
       <div className="px-2">
-        <h2 className="text-xl font-black italic uppercase tracking-tighter dark:text-white text-white">Admin Panel</h2>
-        <p className="text-[10px] text-red-500 font-black uppercase tracking-widest mt-1 italic tracking-tighter text-white">Otoritas Penyelenggara</p>
+        <h2 className="text-xl font-black italic uppercase tracking-tighter dark:text-white dark:text-white">Admin Panel</h2>
+        <p className="text-[10px] text-red-500 font-black uppercase tracking-widest mt-1 italic tracking-tighter dark:text-white">Otoritas Penyelenggara</p>
       </div>
       <div className="bg-white dark:bg-dark-card rounded-[2.5rem] p-8 border border-gray-100 dark:border-gray-800 shadow-xl space-y-4">
         <div className="text-center border-b border-gray-100 dark:border-gray-800 pb-4">
           <h3 className="text-xs font-black uppercase italic dark:text-gray-400">Event Management</h3>
         </div>
-        <button type="button" onClick={() => setShowEventModal(true)} disabled={isSubmitting} className="w-full py-4 bg-primary text-white rounded-2xl font-black uppercase italic text-xs shadow-lg shadow-primary/30 active:scale-95 transition-all">Buat Event Baru</button>
+        <button type="button" onClick={() => setShowEventModal(true)} disabled={isSubmitting} className="w-full py-4 bg-primary dark:text-white rounded-2xl font-black uppercase italic text-xs shadow-lg shadow-primary/30 active:scale-95 transition-all">Buat Event Baru</button>
         <button type="button" onClick={handleResetArena} disabled={isSubmitting} className="w-full py-4 bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-white rounded-2xl font-black uppercase italic text-xs active:scale-95 transition-all">Reset Arena Status</button>
       </div>
     </motion.div>
   );
 
-const ProfileContent = () => {
+  const ProfileContent = () => {
     const [isEditing, setIsEditing] = useState(false);
     const [editNick, setEditNick] = useState(blader?.nickname || "");
 
@@ -366,17 +368,17 @@ const ProfileContent = () => {
     return (
       <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-6">
         {/* Card Profil Utama */}
-        <div className="bg-white dark:bg-dark-card rounded-[2.5rem] p-8 text-center shadow-sm border border-gray-100 dark:border-gray-800 text-white">
+        <div className="bg-white dark:bg-dark-card rounded-[2.5rem] p-8 text-center shadow-sm border border-gray-100 dark:border-gray-800 dark:text-white">
           <div className="relative w-24 h-24 mx-auto mb-4">
             <img src={user.picture} referrerPolicy="no-referrer" className="w-full h-full rounded-3xl border-4 border-primary shadow-lg object-cover" alt="profile" />
-            <div className="absolute -bottom-2 -right-2 bg-primary text-white p-2 rounded-xl"><Trophy size={16} /></div>
+            <div className="absolute -bottom-2 -right-2 bg-primary dark:text-white p-2 rounded-xl"><Trophy size={16} /></div>
           </div>
           {isEditing ? (
-            <div className="space-y-3 text-white">
+            <div className="space-y-3 dark:text-white">
               <input value={editNick} onChange={(e) => setEditNick(e.target.value.replace(/[^a-zA-Z0-9_]/g, ""))} className="w-full p-3 bg-gray-100 dark:bg-gray-800 rounded-xl text-center font-bold outline-none border-2 border-primary dark:text-white" />
               <div className="flex gap-2 text-sm">
                 <button type="button" onClick={() => setIsEditing(false)} className="flex-1 py-2 bg-gray-200 dark:bg-gray-700 rounded-xl font-bold dark:text-white">Batal</button>
-                <button type="button" onClick={handleUpdateNick} className="flex-1 py-2 bg-primary text-white rounded-xl font-bold">{isSubmitting ? <Loader2 className="animate-spin mx-auto" size={18} /> : "Simpan"}</button>
+                <button type="button" onClick={handleUpdateNick} className="flex-1 py-2 bg-primary dark:text-white rounded-xl font-bold">{isSubmitting ? <Loader2 className="animate-spin mx-auto" size={18} /> : "Simpan"}</button>
               </div>
             </div>
           ) : (
@@ -393,7 +395,7 @@ const ProfileContent = () => {
         </div>
 
         {/* --- GRID STATISTIK BARU (3 KOLOM) --- */}
-        <div className="grid grid-cols-3 gap-3 text-center text-white">
+        <div className="grid grid-cols-3 gap-3 text-center dark:text-white">
           {/* RANK */}
           <div className="bg-white dark:bg-dark-card p-4 rounded-[1.5rem] border border-gray-100 dark:border-gray-800 shadow-sm">
             <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-1">Rank</p>
@@ -417,35 +419,52 @@ const ProfileContent = () => {
   };
 
   // -- RENDER CONDITIONALS --
-  if (loading) return <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-dark-bg text-white"><Loader2 className="animate-spin text-primary text-white" size={40} /></div>;
+  if (loading) return <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-dark-bg dark:text-white"><Loader2 className="animate-spin text-primary dark:text-white" size={40} /></div>;
 
   if (!user) return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-dark-bg p-6 text-center text-white">
-      <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="w-full max-sm bg-white dark:bg-dark-card p-10 rounded-[2.5rem] shadow-xl border border-gray-100 dark:border-gray-800 text-white">
-        <Trophy className="text-primary mx-auto mb-4 text-white" size={48} />
-        <h1 className="text-3xl font-black text-primary mb-2 italic uppercase tracking-tighter text-white">Lalapan Beyblade X lamongan</h1>
-        <p className="text-gray-400 text-[10px] mb-8 font-black uppercase tracking-[0.3em] italic leading-tight text-white">Blader Identity Presence</p>
-        <div className="flex justify-center text-white"><GoogleLogin onSuccess={res => login(jwtDecode(res.credential))} theme="filled_blue" shape="pill" /></div>
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-dark-bg p-6 text-center dark:text-white">
+      <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="w-full max-sm bg-white dark:bg-dark-card p-10 rounded-[2.5rem] shadow-xl border border-gray-100 dark:border-gray-800 dark:text-white">
+        <Trophy className="text-primary mx-auto mb-4 dark:text-white" size={48} />
+        <h1 className="text-3xl font-black text-primary mb-2 italic uppercase tracking-tighter dark:text-white">Lalapan Beyblade X lamongan</h1>
+        <p className="text-gray-400 text-[10px] mb-8 font-black uppercase tracking-[0.3em] italic leading-tight dark:text-white">Blader Identity Presence</p>
+        <div className="flex justify-center dark:text-white"><GoogleLogin onSuccess={res => login(jwtDecode(res.credential))} theme="filled_blue" shape="pill" /></div>
       </motion.div>
     </div>
   );
 
   if (isOnboarding) return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-dark-bg p-6 text-center text-white">
-      <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className="max-w-sm w-full bg-white dark:bg-dark-card p-8 rounded-[2.5rem] shadow-2xl border border-gray-100 dark:border-gray-800 text-white">
-        <UserCircle size={48} className="mx-auto text-primary mb-2 text-white" />
-        <h2 className="text-2xl font-black dark:text-white uppercase italic tracking-tighter text-white">New Blader</h2>
-        <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest mb-8 leading-tight text-white">Masukan nickname Battle-mu!</p>
-        <div className="space-y-6 text-white">
-          <input type="text" value={newNickname} onChange={(e) => setNewNickname(e.target.value.replace(/[^a-zA-Z0-9_]/g, ""))} placeholder="Ex: Dragoon_Storm" className="w-full p-4 bg-gray-50 dark:bg-gray-800 rounded-2xl font-black text-center dark:text-white border-2 border-transparent focus:border-primary outline-none transition-all text-white" />
-          <button type="button" onClick={handleCreateProfile} disabled={isSubmitting || newNickname.length < 3} className="w-full bg-primary text-white py-4 rounded-2xl font-black shadow-lg shadow-primary/30 uppercase italic tracking-widest disabled:opacity-50 tracking-tighter text-white">{isSubmitting ? "Registering..." : "Start Journey"}</button>
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-dark-bg p-6 text-center">
+      <motion.div
+        initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }}
+        className="max-w-sm w-full bg-white dark:bg-dark-card p-8 rounded-[2.5rem] shadow-2xl border border-gray-100 dark:border-gray-800"
+      >
+        <UserCircle size={48} className="mx-auto text-primary mb-2" />
+        <h2 className="text-2xl font-black text-gray-900 dark:text-white uppercase italic tracking-tighter">New Blader</h2>
+        <p className="text-[10px] text-gray-500 dark:text-gray-400 font-black uppercase tracking-widest mb-8">Pilih nickname Battle-mu!</p>
+
+        <div className="space-y-6">
+          <input
+            type="text"
+            value={newNickname}
+            onChange={(e) => setNewNickname(e.target.value.replace(/[^a-zA-Z0-9_]/g, ""))}
+            placeholder="Ex: Dragoon_Storm"
+            className="w-full p-4 bg-gray-100 dark:bg-gray-800 rounded-2xl font-black text-center text-gray-900 dark:text-white border-2 border-transparent focus:border-primary outline-none transition-all"
+          />
+          <button
+            type="button"
+            onClick={handleCreateProfile}
+            disabled={isSubmitting || newNickname.length < 3}
+            className="w-full bg-primary dark:text-white py-4 rounded-2xl font-black shadow-lg shadow-primary/30 uppercase italic tracking-widest disabled:opacity-50 active:scale-95 transition-all"
+          >
+            {isSubmitting ? "Registering..." : "Start Journey"}
+          </button>
         </div>
       </motion.div>
     </div>
   );
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-dark-bg transition-colors duration-500 pb-28 text-white">
+    <div className="min-h-screen bg-gray-50 dark:bg-dark-bg transition-colors duration-500 pb-28 dark:text-white">
       <CreateEventModal
         show={showEventModal}
         onClose={() => setShowEventModal(false)}
@@ -455,39 +474,39 @@ const ProfileContent = () => {
         isSubmitting={isSubmitting}
       />
       <Toaster position="top-center" />
-      <nav className="max-w-md mx-auto p-4 flex justify-between items-center sticky top-0 bg-gray-50/80 dark:bg-dark-bg/80 backdrop-blur-lg z-50 text-white">
-        <div className="flex items-center gap-3 text-white">
-          <img src={user.picture} referrerPolicy="no-referrer" className="w-11 h-11 rounded-2xl border-2 border-primary object-cover text-white" alt="avatar" />
-          <div className='text-white'>
-            <p className="text-[10px] font-black text-primary leading-none uppercase tracking-widest italic mb-0.5 tracking-tighter text-white">Blader Profile</p>
-            <p className="font-black text-sm text-gray-800 dark:text-white uppercase italic tracking-tighter truncate w-32 text-white">{blader?.nickname}</p>
+      <nav className="max-w-md mx-auto p-4 flex justify-between items-center sticky top-0 bg-gray-50/80 dark:bg-dark-bg/80 backdrop-blur-lg z-50 dark:text-white">
+        <div className="flex items-center gap-3 dark:text-white">
+          <img src={user.picture} referrerPolicy="no-referrer" className="w-11 h-11 rounded-2xl border-2 border-primary object-cover dark:text-white" alt="avatar" />
+          <div className='dark:text-white'>
+            <p className="text-[10px] font-black text-primary leading-none uppercase tracking-widest italic mb-0.5 tracking-tighter dark:text-white">Blader Profile</p>
+            <p className="font-black text-sm text-gray-800 dark:text-white uppercase italic tracking-tighter truncate w-32 dark:text-white">{blader?.nickname}</p>
           </div>
         </div>
-        <button type="button" onClick={logout} className="p-3 bg-red-100 text-red-600 rounded-2xl dark:bg-red-900/20 active:scale-90 transition-all text-white"><LogOut size={20} /></button>
+        <button type="button" onClick={logout} className="p-3 bg-red-100 text-red-600 rounded-2xl dark:bg-red-900/20 active:scale-90 transition-all dark:text-white"><LogOut size={20} /></button>
       </nav>
 
-      <main className="max-w-md mx-auto p-4 text-white">
+      <main className="max-w-md mx-auto p-4 dark:text-white">
         <AnimatePresence mode="wait">
           {activeTab === 'arena' ? (
-            <motion.div key="arena" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} className="space-y-8 text-white">
+            <motion.div key="arena" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} className="space-y-8 dark:text-white">
               {!data?.event ? (
-                <div className="text-center p-12 bg-white dark:bg-dark-card rounded-[2.5rem] shadow-sm border border-gray-100 dark:border-gray-800 text-white">
-                  <Users className="text-gray-300 mx-auto mb-4 text-white" size={48} />
-                  <h3 className="font-black text-gray-400 uppercase italic tracking-widest tracking-tighter text-white">Arena Kosong</h3>
+                <div className="text-center p-12 bg-white dark:bg-dark-card rounded-[2.5rem] shadow-sm border border-gray-100 dark:border-gray-800 dark:text-white">
+                  <Users className="text-gray-300 mx-auto mb-4 dark:text-white" size={48} />
+                  <h3 className="font-black text-gray-400 uppercase italic tracking-widest tracking-tighter dark:text-white">Arena Kosong</h3>
                 </div>
               ) : (
                 <>
-                  <div className="bg-primary p-7 rounded-[2.5rem] text-white shadow-xl shadow-primary/30 relative overflow-hidden text-center sm:text-left">
-                    <div className="relative z-10 text-white">
-                      <span className="text-[10px] font-black uppercase tracking-[0.3em] bg-white/20 px-3 py-1 rounded-full text-white">Arena Active</span>
-                      <h2 className="text-3xl font-black mt-4 mb-4 uppercase italic tracking-tighter leading-none text-white">{data.event.nama}</h2>
-                      <div className="flex items-center justify-center sm:justify-start gap-2 text-xs font-bold opacity-80 mb-8 italic text-white"><MapPin size={16} /> {data.event.lokasi}</div>
-                      <div className="flex justify-between items-end text-left text-white">
-                        <div className='text-white'>
-                          <p className="text-[10px] font-black uppercase tracking-widest opacity-60 mb-1 text-white">Bladers Ready</p>
-                          <div className="flex items-center gap-2 text-white"><Users size={20} /><span className="text-2xl font-black italic text-white">{data.count}</span></div>
+                  <div className="bg-primary p-7 rounded-[2.5rem] dark:text-white shadow-xl shadow-primary/30 relative overflow-hidden text-center sm:text-left">
+                    <div className="relative z-10 dark:text-white">
+                      <span className="text-[10px] font-black uppercase tracking-[0.3em] bg-white/20 px-3 py-1 rounded-full dark:text-white">Arena Active</span>
+                      <h2 className="text-3xl font-black mt-4 mb-4 uppercase italic tracking-tighter leading-none dark:text-white">{data.event.nama}</h2>
+                      <div className="flex items-center justify-center sm:justify-start gap-2 text-xs font-bold opacity-80 mb-8 italic dark:text-white"><MapPin size={16} /> {data.event.lokasi}</div>
+                      <div className="flex justify-between items-end text-left dark:text-white">
+                        <div className='dark:text-white'>
+                          <p className="text-[10px] font-black uppercase tracking-widest opacity-60 mb-1 dark:text-white">Bladers Ready</p>
+                          <div className="flex items-center gap-2 dark:text-white"><Users size={20} /><span className="text-2xl font-black italic dark:text-white">{data.count}</span></div>
                         </div>
-                        {data?.participants?.some(p => p.email === user?.email) ? (<div className="bg-white/20 backdrop-blur-md px-6 py-3 rounded-2xl flex items-center gap-2 font-black text-xs italic uppercase text-white">
+                        {data?.participants?.some(p => p.email === user?.email) ? (<div className="bg-white/20 backdrop-blur-md px-6 py-3 rounded-2xl flex items-center gap-2 font-black text-xs italic uppercase dark:text-white">
                           <CheckCircle2 size={18} /> Ready
                         </div>) : (
                           <button
@@ -501,19 +520,19 @@ const ProfileContent = () => {
                           </button>)}
                       </div>
                     </div>
-                    <div className="absolute -right-10 -top-10 w-40 h-40 bg-white/10 rounded-full blur-3xl text-white" />
+                    <div className="absolute -right-10 -top-10 w-40 h-40 bg-white/10 rounded-full blur-3xl dark:text-white" />
                   </div>
-                  <section className='text-white'>
-                    <div className="flex justify-between items-center mb-6 px-1 text-white"><h3 className="text-xs font-black uppercase italic tracking-widest text-gray-400 text-white">Bladers on Arena</h3><span className="bg-primary/10 text-primary text-[10px] font-black px-3 py-1 rounded-full text-white">{data.count} Bladers</span></div>
-                    <div className="grid gap-4 text-white">
+                  <section className='dark:text-white'>
+                    <div className="flex justify-between items-center mb-6 px-1 dark:text-white"><h3 className="text-xs font-black uppercase italic tracking-widest text-gray-400 dark:text-white">Bladers on Arena</h3><span className="bg-primary/10 text-primary text-[10px] font-black px-3 py-1 rounded-full dark:text-white">{data.count} Bladers</span></div>
+                    <div className="grid gap-4 dark:text-white">
                       {data.participants?.map((p, i) => (
-                        <motion.div key={i} initial={{ x: -20, opacity: 0 }} animate={{ x: 0, opacity: 1 }} transition={{ delay: i * 0.05 }} className="flex items-center gap-4 bg-white dark:bg-dark-card p-4 rounded-3xl shadow-sm border border-gray-100 dark:border-gray-800 text-white">
-                          <img src={p.foto} referrerPolicy="no-referrer" className="w-12 h-12 rounded-2xl object-cover border-2 border-gray-50 dark:border-gray-700 shadow-sm text-white" alt="" />
-                          <div className="flex-1 text-white">
-                            <p className="font-black text-[15px] dark:text-gray-100 uppercase italic tracking-tighter leading-none mb-1 text-white">{p.nama}</p>
-                            <p className="text-[9px] text-primary font-black uppercase tracking-[0.2em] italic leading-tight text-white">Ranked Blader</p>
+                        <motion.div key={i} initial={{ x: -20, opacity: 0 }} animate={{ x: 0, opacity: 1 }} transition={{ delay: i * 0.05 }} className="flex items-center gap-4 bg-white dark:bg-dark-card p-4 rounded-3xl shadow-sm border border-gray-100 dark:border-gray-800 dark:text-white">
+                          <img src={p.foto} referrerPolicy="no-referrer" className="w-12 h-12 rounded-2xl object-cover border-2 border-gray-50 dark:border-gray-700 shadow-sm dark:text-white" alt="" />
+                          <div className="flex-1 dark:text-white">
+                            <p className="font-black text-[15px] dark:text-gray-100 uppercase italic tracking-tighter leading-none mb-1 dark:text-white">{p.nama}</p>
+                            <p className="text-[9px] text-primary font-black uppercase tracking-[0.2em] italic leading-tight dark:text-white">Ranked Blader</p>
                           </div>
-                          <div className="w-2.5 h-2.5 bg-green-500 rounded-full shadow-[0_0_12px_rgba(34,197,94,0.8)] animate-pulse text-white" />
+                          <div className="w-2.5 h-2.5 bg-green-500 rounded-full shadow-[0_0_12px_rgba(34,197,94,0.8)] animate-pulse dark:text-white" />
                         </motion.div>
                       ))}
                     </div>
@@ -531,20 +550,20 @@ const ProfileContent = () => {
         </AnimatePresence>
       </main>
 
-      <nav className="fixed bottom-6 left-1/2 -translate-x-1/2 w-[92%] max-w-md bg-white/80 dark:bg-dark-card/80 backdrop-blur-2xl border border-white/20 dark:border-gray-800 rounded-[2.5rem] p-2 shadow-2xl flex justify-between items-center z-50 text-white">
-        <button type="button" onClick={() => setActiveTab('arena')} className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${activeTab === 'arena' ? 'bg-primary text-white shadow-lg' : 'text-gray-400'}`}>
-          <MapPin size={18} /><span className="text-[8px] font-black uppercase italic tracking-tighter leading-none text-white">Arena</span>
+      <nav className="fixed bottom-6 left-1/2 -translate-x-1/2 w-[92%] max-w-md bg-white/80 dark:bg-dark-card/80 backdrop-blur-2xl border border-white/20 dark:border-gray-800 rounded-[2.5rem] p-2 shadow-2xl flex justify-between items-center z-50 dark:text-white">
+        <button type="button" onClick={() => setActiveTab('arena')} className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${activeTab === 'arena' ? 'bg-primary dark:text-white shadow-lg' : 'text-gray-400'}`}>
+          <MapPin size={18} /><span className="text-[8px] font-black uppercase italic tracking-tighter leading-none dark:text-white">Arena</span>
         </button>
-        <button type="button" onClick={() => setActiveTab('standings')} className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${activeTab === 'standings' ? 'bg-primary text-white shadow-lg' : 'text-gray-400'}`}>
-          <Trophy size={18} /><span className="text-[8px] font-black uppercase italic tracking-tighter leading-none text-white">Standings</span>
+        <button type="button" onClick={() => setActiveTab('standings')} className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${activeTab === 'standings' ? 'bg-primary dark:text-white shadow-lg' : 'text-gray-400'}`}>
+          <Trophy size={18} /><span className="text-[8px] font-black uppercase italic tracking-tighter leading-none dark:text-white">Standings</span>
         </button>
         {blader?.role === 'Admin' && (
-          <button type="button" onClick={() => setActiveTab('admin')} className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${activeTab === 'admin' ? 'bg-red-500 text-white shadow-lg shadow-red-500/30' : 'text-gray-400'}`}>
-            <ShieldCheck size={18} /><span className="text-[8px] font-black uppercase italic tracking-tighter leading-none text-white">Admin</span>
+          <button type="button" onClick={() => setActiveTab('admin')} className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${activeTab === 'admin' ? 'bg-red-500 dark:text-white shadow-lg shadow-red-500/30' : 'text-gray-400'}`}>
+            <ShieldCheck size={18} /><span className="text-[8px] font-black uppercase italic tracking-tighter leading-none dark:text-white">Admin</span>
           </button>
         )}
-        <button type="button" onClick={() => setActiveTab('profile')} className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${activeTab === 'profile' ? 'bg-primary text-white shadow-lg' : 'text-gray-400'}`}>
-          <UserCircle size={18} /><span className="text-[8px] font-black uppercase italic tracking-tighter leading-none text-white">Profile</span>
+        <button type="button" onClick={() => setActiveTab('profile')} className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${activeTab === 'profile' ? 'bg-primary dark:text-white shadow-lg' : 'text-gray-400'}`}>
+          <UserCircle size={18} /><span className="text-[8px] font-black uppercase italic tracking-tighter leading-none dark:text-white">Profile</span>
         </button>
       </nav>
     </div>
