@@ -11,6 +11,12 @@
   --radius-2xl: 2rem;
 }
 
+@layer utilities {
+  .font-outline-1 {
+    -webkit-text-stroke: 1px rgba(59, 130, 246, 0.3);
+  }
+}
+
 /* Base Style untuk smooth transition dark mode */
 @layer base {
   body {
