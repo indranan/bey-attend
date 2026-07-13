@@ -10,7 +10,7 @@ import {
   Trophy, UserCircle, Edit3, ShieldCheck
 } from 'lucide-react';
 
-const GAS_URL = "https://script.google.com/macros/s/AKfycbxxRUZDeNWYaXFymTSqrd1aeOa7DszFkZ50sd1wGVdtXD2MqPdU8on1MqRB7TU_7x0HiA/exec";
+const GAS_URL = "https://script.google.com/macros/s/AKfycbzC61Vx388vq9XWsRRxHKs93H7JMwoMNL8hgulqdhmlPlqFjsjY_Xblhon-rNBeWRxjig/exec";
 
 // --- KOMPONEN MODAL (DIPINDAH KE LUAR AGAR TIDAK REFRESH SAAT mengetik) ---
 const CreateEventModal = ({ show, onClose, form, setForm, onSubmit, isSubmitting }) => (
@@ -261,6 +261,31 @@ export default function App() {
     }
   };
 
+  const handleCancelAttend = async () => {
+    if (!window.confirm("Batal hadir dari event ini?")) return;
+
+    setIsSubmitting(true);
+    try {
+      const payload = JSON.stringify({
+        eventId: data.event.id,
+        googleId: user.sub
+      });
+
+      const res = await axios.post(`${GAS_URL}?path=cancelAttendance`, payload, {
+        headers: { 'Content-Type': 'text/plain' },
+      });
+
+      if (res.data.status === "success") {
+        toast.success("Berhasil batal hadir");
+        fetchEventData(); // Refresh daftar blader di arena
+      }
+    } catch (err) {
+      toast.error("Gagal membatalkan kehadiran");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   // -- SUB-COMPONENTS (TABS) --
 
   const StandingsContent = () => {
@@ -506,18 +531,34 @@ export default function App() {
                           <p className="text-[10px] font-black uppercase tracking-widest opacity-60 mb-1 dark:text-white">Bladers Ready</p>
                           <div className="flex items-center gap-2 dark:text-white"><Users size={20} /><span className="text-2xl font-black italic dark:text-white">{data.count}</span></div>
                         </div>
-                        {data?.participants?.some(p => p.email === user?.email) ? (<div className="bg-white/20 backdrop-blur-md px-6 py-3 rounded-2xl flex items-center gap-2 font-black text-xs italic uppercase dark:text-white">
-                          <CheckCircle2 size={18} /> Ready
-                        </div>) : (
+                        {/* Logic Tombol Hadir / Batal */}
+                        {data?.participants?.some(p => p.email === user?.email) ? (
+                          <div className="flex flex-col items-end gap-2">
+                            {/* Status Ready */}
+                            <div className="bg-white/20 backdrop-blur-md px-6 py-3 rounded-2xl flex items-center gap-2 font-black text-xs italic uppercase text-white">
+                              <CheckCircle2 size={18} /> Ready
+                            </div>
+
+                            {/* Tombol Batal Hadir */}
+                            <button
+                              type="button"
+                              onClick={handleCancelAttend}
+                              disabled={isSubmitting}
+                              className="text-[10px] font-black text-white/50 uppercase italic tracking-widest hover:text-red-400 transition-colors"
+                            >
+                              {isSubmitting ? "..." : "Batal Hadir"}
+                            </button>
+                          </div>
+                        ) : (
                           <button
                             type="button"
                             onClick={handleAttend}
                             disabled={isSubmitting}
-                            className="bg-white text-primary px-8 py-4 rounded-2xl font-black shadow-xl uppercase italic tracking-tighter text-sm disabled:opacity-50 hover:scale-105 active:scale-95 transition-all"
+                            className="bg-white text-primary px-8 py-4 rounded-2xl font-black shadow-xl uppercase italic tracking-tighter text-sm disabled:opacity-50 active:scale-95 transition-all"
                           >
-                            {/* Perhatikan: text-primary akan membuatnya berwarna biru di atas putih */}
                             {isSubmitting ? <Loader2 className="animate-spin" /> : "I'm Ready!"}
-                          </button>)}
+                          </button>
+                        )}
                       </div>
                     </div>
                     <div className="absolute -right-10 -top-10 w-40 h-40 bg-white/10 rounded-full blur-3xl dark:text-white" />
