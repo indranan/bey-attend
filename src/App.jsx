@@ -6,8 +6,8 @@ import axios from 'axios';
 import toast, { Toaster } from 'react-hot-toast';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  LogOut, MapPin, Users, CheckCircle2, Loader2,
-  Trophy, UserCircle, Edit3, ShieldCheck
+  LogOut, MapPin, Clock8, Users, CheckCircle2, Loader2,
+  Trophy, UserCircle, Edit3, ShieldCheck, TriangleAlert
 } from 'lucide-react';
 
 const GAS_URL = "https://script.google.com/macros/s/AKfycbzC61Vx388vq9XWsRRxHKs93H7JMwoMNL8hgulqdhmlPlqFjsjY_Xblhon-rNBeWRxjig/exec";
@@ -102,6 +102,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('arena');
   const [showEventModal, setShowEventModal] = useState(false);
   const [eventForm, setEventForm] = useState({ nama: '', lokasi: '' });
+  const [showCancelModal, setShowCancelModal] = useState(false);
 
   // -- INITIAL LOAD --
   useEffect(() => {
@@ -262,24 +263,30 @@ export default function App() {
   };
 
   const handleCancelAttend = async () => {
-    if (!window.confirm("Batal hadir dari event ini?")) return;
-
     setIsSubmitting(true);
+
     try {
       const payload = JSON.stringify({
         eventId: data.event.id,
-        googleId: user.sub
+        googleId: user.sub,
       });
 
-      const res = await axios.post(`${GAS_URL}?path=cancelAttendance`, payload, {
-        headers: { 'Content-Type': 'text/plain' },
-      });
+      const res = await axios.post(
+        `${GAS_URL}?path=cancelAttendance`,
+        payload,
+        {
+          headers: { "Content-Type": "text/plain" },
+        }
+      );
 
       if (res.data.status === "success") {
         toast.success("Berhasil batal hadir");
-        fetchEventData(); // Refresh daftar blader di arena
+        fetchEventData();
+      } else {
+        toast.error(res.data.message || "Gagal membatalkan kehadiran");
       }
     } catch (err) {
+      console.error(err);
       toast.error("Gagal membatalkan kehadiran");
     } finally {
       setIsSubmitting(false);
@@ -336,7 +343,7 @@ export default function App() {
                     <td className="p-4">
                       <div className="flex items-center gap-3">
                         <img src={item.foto || `https://ui-avatars.com/api/?name=${item.name}`} referrerPolicy="no-referrer" className="w-10 h-10 rounded-xl object-cover border-2 border-gray-800 shadow-md" alt="" />
-                        <p className={`text-xs font-black uppercase italic tracking-tighter leading-none ${isMe ? 'text-primary' : 'dark:text-white'}`}>{item.name}</p>
+                        <p className={`text-xs font-black text-[15px] tracking-tighter leading-none ${isMe ? 'text-primary' : 'dark:text-white'}`}>{item.name}</p>
                       </div>
                     </td>
                     <td className="p-4 text-center font-black text-primary italic">{item.point}</td>
@@ -408,7 +415,7 @@ export default function App() {
             </div>
           ) : (
             <div>
-              <h2 className="text-2xl font-black italic uppercase tracking-tighter dark:text-white">{blader?.nickname}</h2>
+              <h2 className="text-2xl font-black italic tracking-tighter dark:text-white">{blader?.nickname}</h2>
               <p className="text-[10px] text-gray-400 font-bold uppercase tracking-[0.2em] mb-4">{blader?.role || 'Blader'}</p>
               {settings.allow_nickname_change === "true" && (
                 <button type="button" onClick={() => setIsEditing(true)} className="text-[10px] font-black text-primary border-2 border-primary/20 px-6 py-2 rounded-full flex items-center gap-2 mx-auto hover:bg-primary/5 transition-all">
@@ -435,7 +442,7 @@ export default function App() {
 
           {/* FINISH POINTS */}
           <div className="bg-white dark:bg-dark-card p-4 rounded-[1.5rem] border border-gray-100 dark:border-gray-800 shadow-sm">
-            <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-1">Finish</p>
+            <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-1">Points Finish</p>
             <p className="text-lg font-black text-primary italic uppercase italic">{myStats?.pointFinish || 0}</p>
           </div>
         </div>
@@ -458,21 +465,23 @@ export default function App() {
   );
 
   if (isOnboarding) return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-dark-bg p-6 text-center">
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-dark-bg p-6 text-center dark:text-white">
       <motion.div
         initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }}
         className="max-w-sm w-full bg-white dark:bg-dark-card p-8 rounded-[2.5rem] shadow-2xl border border-gray-100 dark:border-gray-800"
       >
         <UserCircle size={48} className="mx-auto text-primary mb-2" />
         <h2 className="text-2xl font-black text-gray-900 dark:text-white uppercase italic tracking-tighter">New Blader</h2>
-        <p className="text-[10px] text-gray-500 dark:text-gray-400 font-black uppercase tracking-widest mb-8">Pilih nickname Battle-mu!</p>
+        <p className="text-[10px] text-gray-500 dark:text-gray-400 font-black uppercase tracking-widest mb-8">Apa nickname Battle-mu?</p>
 
         <div className="space-y-6">
           <input
             type="text"
             value={newNickname}
-            onChange={(e) => setNewNickname(e.target.value.replace(/[^a-zA-Z0-9_]/g, ""))}
-            placeholder="Ex: Dragoon_Storm"
+            onChange={(e) => setNewNickname(e.target.value
+              .replace(/[^a-zA-Z0-9_\s]/g, "")
+              .replace(/\s{2,}/g, " "))}
+            placeholder="Ex: Mail Basikal"
             className="w-full p-4 bg-gray-100 dark:bg-gray-800 rounded-2xl font-black text-center text-gray-900 dark:text-white border-2 border-transparent focus:border-primary outline-none transition-all"
           />
           <button
@@ -504,7 +513,7 @@ export default function App() {
           <img src={user.picture} referrerPolicy="no-referrer" className="w-11 h-11 rounded-2xl border-2 border-primary object-cover dark:text-white" alt="avatar" />
           <div className='dark:text-white'>
             <p className="text-[10px] font-black text-primary leading-none uppercase tracking-widest italic mb-0.5 tracking-tighter dark:text-white">Blader Profile</p>
-            <p className="font-black text-sm text-gray-800 dark:text-white uppercase italic tracking-tighter truncate w-32 dark:text-white">{blader?.nickname}</p>
+            <p className="font-black text-sm text-gray-800 dark:text-white italic tracking-tighter truncate w-32 dark:text-white">{blader?.nickname}</p>
           </div>
         </div>
         <button type="button" onClick={logout} className="p-3 bg-red-100 text-red-600 rounded-2xl dark:bg-red-900/20 active:scale-90 transition-all dark:text-white"><LogOut size={20} /></button>
@@ -525,7 +534,8 @@ export default function App() {
                     <div className="relative z-10 dark:text-white">
                       <span className="text-[10px] font-black uppercase tracking-[0.3em] bg-white/20 px-3 py-1 rounded-full dark:text-white">Arena Active</span>
                       <h2 className="text-3xl font-black mt-4 mb-4 uppercase italic tracking-tighter leading-none dark:text-white">{data.event.nama}</h2>
-                      <div className="flex items-center justify-center sm:justify-start gap-2 text-xs font-bold opacity-80 mb-8 italic dark:text-white"><MapPin size={16} /> {data.event.lokasi}</div>
+                      <div className="flex items-center justify-center sm:justify-start gap-2 text-xs font-bold opacity-80 mb-2 italic dark:text-white"><MapPin size={16} /> {data.event.lokasi}</div>
+                      <div className="flex items-center justify-center sm:justify-start gap-2 text-xs font-bold opacity-80 mb-8 italic dark:text-white"><Clock8 size={16} /> 20.00 WIB</div>
                       <div className="flex justify-between items-end text-left dark:text-white">
                         <div className='dark:text-white'>
                           <p className="text-[10px] font-black uppercase tracking-widest opacity-60 mb-1 dark:text-white">Bladers Ready</p>
@@ -533,21 +543,26 @@ export default function App() {
                         </div>
                         {/* Logic Tombol Hadir / Batal */}
                         {data?.participants?.some(p => p.email === user?.email) ? (
-                          <div className="flex flex-col items-end gap-2">
-                            {/* Status Ready */}
-                            <div className="bg-white/20 backdrop-blur-md px-6 py-3 rounded-2xl flex items-center gap-2 font-black text-xs italic uppercase text-white">
-                              <CheckCircle2 size={18} /> Ready
+                          <div className="flex flex-col items-end gap-3">
+
+                            {/* READY */}
+                            <div className="bg-white/20 backdrop-blur-md px-6 py-3 rounded-2xl text-center min-w-[170px]">
+
+                              <div className="flex items-center justify-center gap-2 text-white/90 text-sm font-semibold">
+                                <div className="w-2.5 h-2.5 rounded-full bg-green-400 animate-pulse"></div>
+                                You're checked in
+                              </div>
+
                             </div>
 
-                            {/* Tombol Batal Hadir */}
                             <button
                               type="button"
-                              onClick={handleCancelAttend}
+                              onClick={() => setShowCancelModal(true)}
                               disabled={isSubmitting}
-                              className="text-[10px] font-black text-white/50 uppercase italic tracking-widest hover:text-red-400 transition-colors"
-                            >
-                              {isSubmitting ? "..." : "Batal Hadir"}
+                              className="w-full py-3 rounded-2xl bg-red-500/20 border border-red-300/30 text-red-100 font-bold text-sm transition-all hover:bg-red-500 hover:text-white active:scale-95 disabled:opacity-50 ">
+                              {isSubmitting ? "..." : "Cancel Attendance"}
                             </button>
+
                           </div>
                         ) : (
                           <button
@@ -570,7 +585,7 @@ export default function App() {
                         <motion.div key={i} initial={{ x: -20, opacity: 0 }} animate={{ x: 0, opacity: 1 }} transition={{ delay: i * 0.05 }} className="flex items-center gap-4 bg-white dark:bg-dark-card p-4 rounded-3xl shadow-sm border border-gray-100 dark:border-gray-800 dark:text-white">
                           <img src={p.foto} referrerPolicy="no-referrer" className="w-12 h-12 rounded-2xl object-cover border-2 border-gray-50 dark:border-gray-700 shadow-sm dark:text-white" alt="" />
                           <div className="flex-1 dark:text-white">
-                            <p className="font-black text-[15px] dark:text-gray-100 uppercase italic tracking-tighter leading-none mb-1 dark:text-white">{p.nama}</p>
+                            <p className="font-black text-[15px] dark:text-gray-100 tracking-tighter leading-none mb-1 dark:text-white">{p.nama}</p>
                             <p className="text-[9px] text-primary font-black uppercase tracking-[0.2em] italic leading-tight dark:text-white">Ranked Blader</p>
                           </div>
                           <div className="w-2.5 h-2.5 bg-green-500 rounded-full shadow-[0_0_12px_rgba(34,197,94,0.8)] animate-pulse dark:text-white" />
@@ -607,6 +622,63 @@ export default function App() {
           <UserCircle size={18} /><span className="text-[8px] font-black uppercase italic tracking-tighter leading-none dark:text-white">Profile</span>
         </button>
       </nav>
+
+      {showCancelModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-6">
+
+          <div className="w-full max-w-sm rounded-3xl bg-white dark:bg-gray-900 p-7 shadow-2xl animate-in fade-in zoom-in duration-200">
+
+            <div className="flex justify-center mb-5">
+
+              <div className="w-16 h-16 rounded-full bg-red-100 dark:bg-red-500/20 flex items-center justify-center">
+
+                <TriangleAlert
+                  size={34}
+                  className="text-red-500"
+                />
+
+              </div>
+
+            </div>
+
+            <h2 className="text-xl font-black text-center text-gray-900 dark:text-white">
+
+              Cancel Attendance?
+
+            </h2>
+
+            <p className="text-sm text-center text-gray-500 dark:text-gray-400 mt-3">
+
+              Are you sure you want to cancel your attendance for this event?
+
+            </p>
+
+            <div className="flex gap-3 mt-8">
+
+              <button
+                onClick={() => setShowCancelModal(false)}
+                className="flex-1 py-3 rounded-2xl bg-gray-100 dark:bg-gray-800 font-bold text-gray-700 dark:text-white hover:bg-gray-200 transition"
+              >
+                Keep
+              </button>
+
+              <button
+                onClick={() => {
+                  setShowCancelModal(false);
+                  handleCancelAttend();
+                }}
+                className="flex-1 py-3 rounded-2xl bg-red-500 text-white font-bold hover:bg-red-600 transition"
+              >
+                Cancel
+              </button>
+
+            </div>
+
+          </div>
+
+        </div>
+      )}
+
     </div>
   );
 }
