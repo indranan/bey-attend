@@ -7,7 +7,7 @@ import {
   LogOut, Users, Loader2, MapPin, Trophy, UserCircle, ShieldCheck
 } from 'lucide-react';
 import toast, { Toaster } from 'react-hot-toast';
-import { getFromGas, postToGas } from './utils/api';
+import { getFromGas, postToGas, updateBio, uploadProfilePhoto, updatePoints } from './utils/api';
 import CancelModal from './components/CancelModal';
 import CreateEventModal from './components/CreateEventModal';
 import EventCard from './components/EventCard';
@@ -15,9 +15,10 @@ import ParticipantList from './components/ParticipantList';
 import StandingsContent from './components/StandingsContent';
 import AdminContent from './components/AdminContent';
 import ProfileContent from './components/ProfileContent';
+import ProfileModal from './components/ProfileModal';
 
 export default function App() {
-  const { user, login, logout } = useContext(AuthContext);
+  const { user, login, logout, updateUser } = useContext(AuthContext);
 
   const [data, setData] = useState({ event: null, participants: [], count: 0, challongeUrl: '' });
   const [leaderboard, setLeaderboard] = useState([]);
@@ -31,6 +32,9 @@ export default function App() {
   const [showEventModal, setShowEventModal] = useState(false);
   const [eventForm, setEventForm] = useState({ nama: '', lokasi: '' });
   const [showCancelModal, setShowCancelModal] = useState(false);
+  const [modalPlayer, setModalPlayer] = useState(null);
+  const [modalProfile, setModalProfile] = useState(null);
+  const [modalLoading, setModalLoading] = useState(false);
 
   const refreshEvent = async () => {
     const res = await getFromGas('getEvent');
@@ -84,7 +88,7 @@ export default function App() {
 
   const handleAttend = async () => {
     setIsSubmitting(true);
-    const payload = { eventId: data.event.id, googleId: user.sub, nickname: blader.nickname, email: user.email, foto: user.picture };
+    const payload = { eventId: data.event.id, googleId: user.sub, nickname: blader.nickname, email: user.email, foto: blader?.photo || user.picture };
     const res = await postToGas('attendance', payload);
     if (res?.status === 'success') {
       toast.success('Ready to Battle!');
@@ -166,6 +170,96 @@ export default function App() {
     setIsSubmitting(false);
   };
 
+  const handleUpdateBio = async ({ slogan, catatan }) => {
+    setIsSubmitting(true);
+    const res = await updateBio({ googleId: user.sub, slogan, catatan });
+    if (res?.status === 'success') {
+      toast.success('Bio tersimpan!');
+      await checkProfile();
+    } else {
+      toast.error(res?.message || 'Gagal simpan bio');
+    }
+    setIsSubmitting(false);
+    return res;
+  };
+
+  const handleUploadPhoto = async (base64) => {
+    setIsSubmitting(true);
+    const res = await uploadProfilePhoto({ googleId: user.sub, base64 });
+    if (res?.status === 'success') {
+      toast.success('Foto profil diupdate!');
+      await checkProfile();
+      refreshLeaderboard();
+      refreshEvent(); // agar foto di daftar peserta Arena ikut berubah
+      // Update state global user agar foto di navbar (pojok kiri atas) langsung reaktif
+      if (res.photoUrl) updateUser({ ...user, picture: res.photoUrl });
+    } else {
+      toast.error(res?.message || 'Gagal upload foto');
+    }
+    setIsSubmitting(false);
+  };
+
+  const handleUpdatePoints = async ({ googleId, point, pointFinish }) => {
+    setIsSubmitting(true);
+    const res = await updatePoints({ googleId, point, pointFinish });
+    if (res?.status === 'success') {
+      toast.success('Poin pemain diupdate!');
+      refreshLeaderboard();
+    } else {
+      toast.error(res?.message || 'Gagal update poin');
+    }
+    setIsSubmitting(false);
+  };
+
+  const handleToggleNickname = async () => {
+    setIsSubmitting(true);
+    const res = await postToGas('toggleNicknameSetting');
+    if (res?.status === 'success') {
+      toast.success('Pengaturan ganti nickname diupdate!');
+      const s = await getFromGas('getSettings');
+      if (s) setSettings(s);
+    } else {
+      toast.error(res?.message || 'Gagal update pengaturan');
+    }
+    setIsSubmitting(false);
+  };
+
+  const openProfile = async (player) => {
+    setModalPlayer(player);
+    setModalLoading(true);
+    try {
+      const lbIndex = leaderboard.findIndex((l) => l.googleId === player.googleId);
+      const lb = lbIndex !== -1 ? leaderboard[lbIndex] : {};
+      let bio = {};
+      if (player.googleId) {
+        const b = await getFromGas(`getBlader&googleId=${player.googleId}`);
+        if (b && b.registered) {
+          bio = { slogan: b.slogan, catatan: b.catatan, photo: b.photo, role: b.role };
+        }
+      }
+      setModalProfile({
+        googleId: player.googleId,
+        name: player.nama || player.name || lb.name,
+        foto: player.foto || lb.foto || bio.photo,
+        slogan: bio.slogan || '',
+        catatan: bio.catatan || '',
+        rank: lbIndex !== -1 ? lbIndex + 1 : '-',
+        point: lb.point ?? 0,
+        pointFinish: lb.pointFinish ?? 0,
+        role: bio.role || ''
+      });
+    } catch {
+      setModalProfile(player);
+    } finally {
+      setModalLoading(false);
+    }
+  };
+
+  const closeProfile = () => {
+    setModalPlayer(null);
+    setModalProfile(null);
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-dark-bg dark:text-white">
@@ -235,6 +329,7 @@ export default function App() {
         }}
         isSubmitting={isSubmitting}
       />
+      <ProfileModal player={modalProfile} loading={modalLoading} onClose={closeProfile} />
       <Toaster position="top-center" />
 
       <nav className="max-w-md mx-auto p-4 flex justify-between items-center sticky top-0 bg-gray-50/80 dark:bg-dark-bg/80 backdrop-blur-lg z-50 dark:text-white">
@@ -262,12 +357,23 @@ export default function App() {
                 isSubmitting={isSubmitting}
                 challongeUrl={data.event?.challongeUrl}
               />
-              {data?.event && <ParticipantList participants={data.participants} />}
+              {data?.event && <ParticipantList participants={data.participants} onSelect={openProfile} />}
             </motion.div>
           ) : activeTab === 'standings' ? (
-            <StandingsContent key="standings" leaderboard={leaderboard} user={user} />
+            <StandingsContent key="standings" leaderboard={leaderboard} user={user} onSelect={openProfile} />
           ) : activeTab === 'admin' ? (
-            <AdminContent key="admin" onCreateEvent={() => setShowEventModal(true)} onResetArena={handleResetArena} onGenerateTournament={handleGenerateTournament} isSubmitting={isSubmitting} eventId={data?.event?.id} />
+            <AdminContent
+              key="admin"
+              onCreateEvent={() => setShowEventModal(true)}
+              onResetArena={handleResetArena}
+              onGenerateTournament={handleGenerateTournament}
+              onUpdatePoints={handleUpdatePoints}
+              onToggleNickname={handleToggleNickname}
+              nicknameAllowed={settings.allow_nickname_change === 'true'}
+              leaderboard={leaderboard}
+              isSubmitting={isSubmitting}
+              eventId={data?.event?.id}
+            />
           ) : (
             <ProfileContent
               key="profile"
@@ -276,6 +382,8 @@ export default function App() {
               settings={settings}
               leaderboard={leaderboard}
               onUpdateNickname={handleUpdateNickname}
+              onUpdateBio={handleUpdateBio}
+              onUploadPhoto={handleUploadPhoto}
               isSubmitting={isSubmitting}
             />
           )}

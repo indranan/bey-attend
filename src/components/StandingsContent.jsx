@@ -1,7 +1,7 @@
 import { motion } from 'framer-motion';
 import { Trophy } from 'lucide-react';
 
-const StandingsContent = ({ leaderboard, user }) => {
+const StandingsContent = ({ leaderboard, user, onSelect }) => {
   const getStatusIcon = (status) => {
     const s = String(status).toLowerCase();
     if (s === 'up') return <span className="text-green-500 text-[10px] font-bold">▲</span>;
@@ -39,7 +39,11 @@ const StandingsContent = ({ leaderboard, user }) => {
               const rank = index + 1;
               const isMe = item.googleId === user?.sub;
               return (
-                <tr key={index} className={`${isMe ? 'bg-primary/10' : ''} transition-colors`}>
+                <tr
+                  key={index}
+                  onClick={() => onSelect?.(item)}
+                  className={`${isMe ? 'bg-primary/10' : ''} transition-colors cursor-pointer active:scale-[0.99]`}
+                >
                   <td className="p-4">
                     <div className="flex flex-col items-center gap-1">
                       <div className={`w-7 h-7 rounded-xl flex items-center justify-center text-xs font-black shadow-sm ${

@@ -45,6 +45,10 @@ function doPost(e) {
       case 'resetArena': return resetArena();
       case 'cancelAttendance': return cancelAttendance(data);
       case 'generateTournament': return generateTournament(data);
+      case 'updateBio': return updateBio(data);
+      case 'uploadProfilePhoto': return uploadProfilePhoto(data);
+      case 'updatePoints': return updatePoints(data);
+      case 'toggleNicknameSetting': return toggleNicknameSetting();
       default: return res({ error: "Endpoint POST tidak ditemukan" });
     }
   } catch (err) {
@@ -76,6 +80,7 @@ function fetchActiveEvent() {
   const participants = attendanceRows
     .filter(row => row[1] == activeEvent[0]) // Kolom event_id
     .map(row => ({
+      googleId: row[2], // Google ID peserta
       nama: row[3], // Nickname dari attendance (kolom "nama")
       foto: row[5], // Photo URL
       email: row[4]
@@ -113,9 +118,13 @@ function getBlader(googleId) {
 
   return res({
     registered: true,
+    googleId: player[0].toString(),
     nickname: player[3],
     role: isAdmin ? "Admin" : "Blader",
-    photo: player[4]
+    photo: player[4],
+    photoUrl: player[4],
+    slogan: player[8] ? String(player[8]) : "",
+    catatan: player[9] ? String(player[9]) : ""
   });
 }
 
@@ -158,14 +167,16 @@ function getLeaderboard() {
     players.forEach(row => {
       playerMap[row[0].toString()] = {
         nickname: row[3],
-        foto: row[4]
+        foto: row[4],
+        slogan: row[8] ? String(row[8]) : "",
+        catatan: row[9] ? String(row[9]) : ""
       };
     });
 
     // Gabungkan data
     const finalData = boardRows.map(row => {
       const gId = row[0].toString();
-      const pInfo = playerMap[gId] || { nickname: "Unknown Blader", foto: "" };
+      const pInfo = playerMap[gId] || { nickname: "Unknown Blader", foto: "", slogan: "", catatan: "" };
 
       return {
         googleId: gId,
@@ -173,7 +184,9 @@ function getLeaderboard() {
         point: Number(row[2]) || 0,
         pointFinish: Number(row[3]) || 0,
         name: pInfo.nickname,
-        foto: pInfo.foto
+        foto: pInfo.foto,
+        slogan: pInfo.slogan,
+        catatan: pInfo.catatan
       };
     });
 
@@ -218,7 +231,9 @@ function createProfile(data) {
     data.photoUrl,
     "Blader",
     new Date(), // Join Date
-    new Date()  // Last Updated
+    new Date(), // Last Updated
+    "",          // slogan
+    ""           // catatan
   ]);
   return res({ status: "success" });
 }
@@ -314,6 +329,162 @@ function getSettings() {
     if (r[0]) settings[r[0]] = r[1];
   });
   return res(settings);
+}
+
+// ============================================
+// PROFIL: BIO (Slogan + Catatan)
+// ============================================
+function updateBio(data) {
+  const sheet = SS.getSheetByName("Players");
+  if (!sheet) return res({ status: "error", message: "Sheet Players tidak ditemukan" });
+
+  const rows = sheet.getDataRange().getValues();
+  const rowIndex = rows.findIndex(row => row[0].toString() === String(data.googleId));
+  if (rowIndex === -1) return res({ status: "error", message: "Profil tidak ditemukan" });
+
+  const slogan = String(data.slogan || "").slice(0, 50);
+  const catatan = String(data.catatan || "").slice(0, 150);
+
+  // Kolom: 9 = slogan (index 8), 10 = catatan (index 9)
+  sheet.getRange(rowIndex + 1, 9).setValue(slogan);
+  sheet.getRange(rowIndex + 1, 10).setValue(catatan);
+
+  return res({ status: "success", slogan: slogan, catatan: catatan });
+}
+
+// ============================================
+// PROFIL: UPLOAD FOTO KE GOOGLE DRIVE
+// ============================================
+function getLalapanFolder_() {
+  const props = PropertiesService.getScriptProperties();
+  let folderId = props.getProperty("LALAPAN_DRIVE_FOLDER_ID");
+  let folder = null;
+  if (folderId) {
+    try { folder = DriveApp.getFolderById(folderId); } catch (e) { folder = null; }
+  }
+  if (!folder) {
+    folder = DriveApp.createFolder("Lalapan Profile Photos");
+    props.setProperty("LALAPAN_DRIVE_FOLDER_ID", folder.getId());
+  }
+  return folder;
+}
+
+function uploadProfilePhoto(data) {
+  try {
+    const googleId = String(data.googleId || "");
+    const base64 = String(data.base64 || "");
+    if (!googleId) return res({ status: "error", message: "googleId kosong" });
+    if (!base64) return res({ status: "error", message: "Data foto kosong" });
+
+    const matches = base64.match(/^data:(image\/\w+);base64,(.+)$/);
+    if (!matches) return res({ status: "error", message: "Format foto tidak valid" });
+
+    const mime = matches[1];
+    const ext = mime.split("/")[1];
+    const bytes = Utilities.base64Decode(matches[2]);
+    const fileName = googleId + "_profile.png"; // nama spesifik per user (tidak duplikat)
+    const blob = Utilities.newBlob(bytes, mime, fileName);
+
+    const folder = getLalapanFolder_();
+
+    // Hapus file lama (jika ada) agar tidak menumpuk duplikat di Drive
+    const existing = folder.getFilesByName(fileName);
+    while (existing.hasNext()) {
+      existing.next().setTrashed(true);
+    }
+
+    const file = folder.createFile(blob);
+    // File dapat diakses siapa saja via link -> bisa ditampilkan di <img>
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    // Pakai endpoint thumbnail (lebih aman untuk di-embed di <img>)
+    const photoUrl = "https://drive.google.com/thumbnail?id=" + file.getId() + "&sz=w1000";
+
+    // Update kolom photoUrl (index 4) di sheet Players
+    const pSheet = SS.getSheetByName("Players");
+    const prows = pSheet.getDataRange().getValues();
+    const pIdx = prows.findIndex(r => r[0].toString() === googleId);
+    if (pIdx !== -1) pSheet.getRange(pIdx + 1, 5).setValue(photoUrl);
+
+    // Update kolom foto di sheet Leaderboard (jika ada)
+    const lSheet = SS.getSheetByName("Leaderboard");
+    if (lSheet) {
+      const lrows = lSheet.getDataRange().getValues();
+      const fcol = lrows[0].findIndex(h => String(h).toLowerCase() === "foto");
+      if (fcol >= 0) {
+        const lIdx = lrows.slice(1).findIndex(r => r[0].toString() === googleId);
+        if (lIdx !== -1) lSheet.getRange(lIdx + 2, fcol + 1).setValue(photoUrl);
+      }
+    }
+
+    // Update kolom foto di sheet Attendance (semua baris milik user)
+    // Struktur Attendance: 0=date,1=eventId,2=googleId,3=nickname,4=email,5=foto
+    const aSheet = SS.getSheetByName("Attendance");
+    if (aSheet) {
+      const arows = aSheet.getDataRange().getValues();
+      for (let i = 1; i < arows.length; i++) {
+        if (String(arows[i][2]) === googleId) {
+          aSheet.getRange(i + 1, 6).setValue(photoUrl);
+        }
+      }
+    }
+
+    return res({ status: "success", photoUrl: photoUrl });
+  } catch (err) {
+    return res({ status: "error", message: "Gagal upload foto: " + err.message });
+  }
+}
+
+// ============================================
+// ADMIN: UPDATE POIN PEMAIN
+// ============================================
+function updatePoints(data) {
+  const lSheet = SS.getSheetByName("Leaderboard");
+  if (!lSheet) return res({ status: "error", message: "Sheet Leaderboard tidak ditemukan" });
+
+  let googleId = String(data.googleId || "");
+  // Boleh cari via nickname (identifier) lewat sheet Players
+  if (!googleId && data.identifier) {
+    const pSheet = SS.getSheetByName("Players");
+    const prows = pSheet.getDataRange().getValues();
+    const found = prows.find(r => String(r[3]).toLowerCase() === String(data.identifier).toLowerCase());
+    if (found) googleId = String(found[0]);
+  }
+  if (!googleId) return res({ status: "error", message: "Pemain tidak ditemukan" });
+
+  const rows = lSheet.getDataRange().getValues();
+  const idx = rows.findIndex(r => r[0].toString() === googleId);
+  if (idx === -1) return res({ status: "error", message: "Pemain tidak ada di leaderboard" });
+
+  const point = Number(data.point) || 0;
+  const pointFinish = Number(data.pointFinish) || 0;
+
+  // Kolom: 3 = point (index 2), 4 = pointFinish (index 3)
+  lSheet.getRange(idx + 1, 3).setValue(point);
+  lSheet.getRange(idx + 1, 4).setValue(pointFinish);
+
+  return res({ status: "success", googleId: googleId, point: point, pointFinish: pointFinish });
+}
+
+// ============================================
+// ADMIN: TOGGLE IZIN GANTI NICKNAME (global)
+// ============================================
+function toggleNicknameSetting() {
+  const sheet = SS.getSheetByName("Settings");
+  if (!sheet) return res({ status: "error", message: "Sheet Settings tidak ditemukan" });
+
+  const values = sheet.getDataRange().getValues();
+  const idx = values.findIndex(r => String(r[0]).toLowerCase() === "allow_nickname_change");
+
+  if (idx === -1) {
+    // Belum ada setting -> buat default "false"
+    sheet.appendRow(["allow_nickname_change", "false"]);
+    return res({ status: "success", allow_nickname_change: "false" });
+  }
+
+  const current = String(values[idx][1]).toLowerCase() === "true";
+  const next = current ? "false" : "true";
+  sheet.getRange(idx + 1, 2).setValue(next);
+  return res({ status: "success", allow_nickname_change: next });
 }
 
 // ============================================

@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const GAS_URL = "https://script.google.com/macros/s/AKfycbxK_7NZLUxM59QKdaJerar4DtF4drR4QXK2uLYM4cH8Nm_b_qdqpDY9WzGCUT8UZ7Bkcg/exec";
+const GAS_URL = "https://script.google.com/macros/s/AKfycbwTUt8yMgrrVYCpLZCpOKdYiEpsKN7WcLzcOigtoJqMsqIrIVeK57tyrTRvaPjRt47Gvw/exec";
 
 
 export const postToGas = async (path, payload = {}) => {
@@ -24,3 +24,10 @@ export const getFromGas = async (path) => {
     return null;
   }
 };
+
+// --- Profile / Bio ---
+export const updateBio = (payload) => postToGas('updateBio', payload);
+export const uploadProfilePhoto = (payload) => postToGas('uploadProfilePhoto', payload);
+
+// --- Admin ---
+export const updatePoints = (payload) => postToGas('updatePoints', payload);
