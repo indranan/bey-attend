@@ -14,7 +14,7 @@ const ParticipantList = ({ participants, onSelect }) => (
           animate={{ x: 0, opacity: 1 }}
           transition={{ delay: i * 0.05 }}
           onClick={() => onSelect?.(p)}
-          className="flex items-center gap-4 bg-white dark:bg-dark-card p-4 rounded-3xl shadow-sm border border-gray-100 dark:border-gray-800 dark:text-white cursor-pointer active:scale-[0.98] transition-transform hover:border-primary/40"
+          className="flex items-center gap-4 bg-white dark:bg-dark-card p-4 rounded-3xl shadow-sm border border-gray-100 dark:border-gray-800 dark:text-white cursor-pointer select-none active:scale-[0.98] transition-transform hover:border-primary/40"
         >
           <img src={p.foto} referrerPolicy="no-referrer" className="w-12 h-12 rounded-2xl object-cover border-2 border-gray-50 dark:border-gray-700 shadow-sm dark:text-white" alt="" />
           <div className="flex-1 dark:text-white">

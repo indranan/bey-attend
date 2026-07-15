@@ -42,7 +42,7 @@ const StandingsContent = ({ leaderboard, user, onSelect }) => {
                 <tr
                   key={index}
                   onClick={() => onSelect?.(item)}
-                  className={`${isMe ? 'bg-primary/10' : ''} transition-colors cursor-pointer active:scale-[0.99]`}
+                  className={`${isMe ? 'bg-primary/10' : ''} transition-colors cursor-pointer select-none active:scale-[0.99]`}
                 >
                   <td className="p-4">
                     <div className="flex flex-col items-center gap-1">
