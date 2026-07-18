@@ -4,7 +4,7 @@ import { GoogleLogin } from '@react-oauth/google';
 import { jwtDecode } from 'jwt-decode';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
-  LogOut, Users, Loader2, MapPin, Trophy, UserCircle, ShieldCheck
+  LogOut, Loader2, MapPin, Trophy, UserCircle, ShieldCheck, Swords
 } from 'lucide-react';
 import toast, { Toaster } from 'react-hot-toast';
 import { getFromGas, postToGas, updateBio, uploadProfilePhoto, updatePoints } from './utils/api';
@@ -16,6 +16,7 @@ import StandingsContent from './components/StandingsContent';
 import AdminContent from './components/AdminContent';
 import ProfileContent from './components/ProfileContent';
 import ProfileModal from './components/ProfileModal';
+import RefereeArena from './components/RefereeArena';
 
 export default function App() {
   const { user, login, logout, updateUser } = useContext(AuthContext);
@@ -32,7 +33,6 @@ export default function App() {
   const [showEventModal, setShowEventModal] = useState(false);
   const [eventForm, setEventForm] = useState({ nama: '', lokasi: '' });
   const [showCancelModal, setShowCancelModal] = useState(false);
-  const [modalPlayer, setModalPlayer] = useState(null);
   const [modalProfile, setModalProfile] = useState(null);
   const [modalLoading, setModalLoading] = useState(false);
 
@@ -224,39 +224,44 @@ export default function App() {
     setIsSubmitting(false);
   };
 
-  const openProfile = async (player) => {
-    setModalPlayer(player);
+  const openProfile = (player) => {
+    const lbIndex = leaderboard.findIndex((l) => l.googleId === player.googleId);
+    const lb = lbIndex !== -1 ? leaderboard[lbIndex] : {};
+
+    setModalProfile({
+      googleId: player.googleId,
+      name: player.nama || player.name || lb.name,
+      foto: player.foto || lb.foto,
+      slogan: lb.slogan || '',
+      catatan: lb.catatan || '',
+      rank: lbIndex !== -1 ? lbIndex + 1 : '-',
+      point: lb.point ?? 0,
+      pointFinish: lb.pointFinish ?? 0,
+      role: lb.role || ''
+    });
     setModalLoading(true);
-    try {
-      const lbIndex = leaderboard.findIndex((l) => l.googleId === player.googleId);
-      const lb = lbIndex !== -1 ? leaderboard[lbIndex] : {};
-      let bio = {};
-      if (player.googleId) {
-        const b = await getFromGas(`getBlader&googleId=${player.googleId}`);
-        if (b && b.registered) {
-          bio = { slogan: b.slogan, catatan: b.catatan, photo: b.photo, role: b.role };
+
+    if (player.googleId) {
+      getFromGas(`getBlader&googleId=${player.googleId}`).then(b => {
+        if (b?.registered) {
+          setModalProfile(prev => prev ? {
+            ...prev,
+            slogan: b.slogan || prev.slogan,
+            catatan: b.catatan || prev.catatan,
+            foto: b.photo || prev.foto,
+            role: b.role || prev.role
+          } : null);
         }
-      }
-      setModalProfile({
-        googleId: player.googleId,
-        name: player.nama || player.name || lb.name,
-        foto: player.foto || lb.foto || bio.photo,
-        slogan: bio.slogan || '',
-        catatan: bio.catatan || '',
-        rank: lbIndex !== -1 ? lbIndex + 1 : '-',
-        point: lb.point ?? 0,
-        pointFinish: lb.pointFinish ?? 0,
-        role: bio.role || ''
+        setModalLoading(false);
+      }).catch(() => {
+        setModalLoading(false);
       });
-    } catch {
-      setModalProfile(player);
-    } finally {
+    } else {
       setModalLoading(false);
     }
   };
 
   const closeProfile = () => {
-    setModalPlayer(null);
     setModalProfile(null);
   };
 
@@ -344,50 +349,54 @@ export default function App() {
       </nav>
 
       <main className="max-w-md mx-auto p-4 dark:text-white">
-        <AnimatePresence mode="wait">
-          {activeTab === 'arena' ? (
-            <motion.div key="arena" className="space-y-8 dark:text-white">
-              <EventCard
-                event={data.event}
-                participants={data.participants}
-                count={data.count}
-                user={user}
-                onAttend={handleAttend}
-                onCancel={() => setShowCancelModal(true)}
+        {activeTab === 'referee' ? (
+          <RefereeArena key="referee" />
+        ) : (
+          <AnimatePresence mode="wait">
+            {activeTab === 'arena' ? (
+              <motion.div key="arena" className="space-y-8 dark:text-white">
+                <EventCard
+                  event={data.event}
+                  participants={data.participants}
+                  count={data.count}
+                  user={user}
+                  onAttend={handleAttend}
+                  onCancel={() => setShowCancelModal(true)}
+                  isSubmitting={isSubmitting}
+                  challongeUrl={data.event?.challongeUrl}
+                />
+                {data?.event && <ParticipantList participants={data.participants} onSelect={openProfile} />}
+              </motion.div>
+            ) : activeTab === 'standings' ? (
+              <StandingsContent key="standings" leaderboard={leaderboard} user={user} onSelect={openProfile} />
+            ) : activeTab === 'admin' ? (
+              <AdminContent
+                key="admin"
+                onCreateEvent={() => setShowEventModal(true)}
+                onResetArena={handleResetArena}
+                onGenerateTournament={handleGenerateTournament}
+                onUpdatePoints={handleUpdatePoints}
+                onToggleNickname={handleToggleNickname}
+                nicknameAllowed={settings.allow_nickname_change === 'true'}
+                leaderboard={leaderboard}
                 isSubmitting={isSubmitting}
-                challongeUrl={data.event?.challongeUrl}
+                eventId={data?.event?.id}
               />
-              {data?.event && <ParticipantList participants={data.participants} onSelect={openProfile} />}
-            </motion.div>
-          ) : activeTab === 'standings' ? (
-            <StandingsContent key="standings" leaderboard={leaderboard} user={user} onSelect={openProfile} />
-          ) : activeTab === 'admin' ? (
-            <AdminContent
-              key="admin"
-              onCreateEvent={() => setShowEventModal(true)}
-              onResetArena={handleResetArena}
-              onGenerateTournament={handleGenerateTournament}
-              onUpdatePoints={handleUpdatePoints}
-              onToggleNickname={handleToggleNickname}
-              nicknameAllowed={settings.allow_nickname_change === 'true'}
-              leaderboard={leaderboard}
-              isSubmitting={isSubmitting}
-              eventId={data?.event?.id}
-            />
-          ) : (
-            <ProfileContent
-              key="profile"
-              blader={blader}
-              user={user}
-              settings={settings}
-              leaderboard={leaderboard}
-              onUpdateNickname={handleUpdateNickname}
-              onUpdateBio={handleUpdateBio}
-              onUploadPhoto={handleUploadPhoto}
-              isSubmitting={isSubmitting}
-            />
-          )}
-        </AnimatePresence>
+            ) : (
+              <ProfileContent
+                key="profile"
+                blader={blader}
+                user={user}
+                settings={settings}
+                leaderboard={leaderboard}
+                onUpdateNickname={handleUpdateNickname}
+                onUpdateBio={handleUpdateBio}
+                 onUploadPhoto={handleUploadPhoto}
+                isSubmitting={isSubmitting}
+              />
+            )}
+          </AnimatePresence>
+        )}
       </main>
 
       <nav className="fixed bottom-6 left-1/2 -translate-x-1/2 w-[92%] max-w-md bg-white/80 dark:bg-dark-card/80 backdrop-blur-2xl border border-white/20 dark:border-gray-800 rounded-[2.5rem] p-2 shadow-2xl flex justify-between items-center z-50 dark:text-white">
@@ -398,9 +407,14 @@ export default function App() {
           <Trophy size={18} /><span className="text-[8px] font-black uppercase italic tracking-tighter leading-none">Standings</span>
         </button>
         {blader?.role === 'Admin' && (
-          <button type="button" onClick={() => setActiveTab('admin')} className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${activeTab === 'admin' ? 'bg-red-500 dark:text-white shadow-lg shadow-red-500/30' : 'text-gray-400'}`}>
-            <ShieldCheck size={18} /><span className="text-[8px] font-black uppercase italic tracking-tighter leading-none">Admin</span>
-          </button>
+          <>
+            <button type="button" onClick={() => setActiveTab('admin')} className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${activeTab === 'admin' ? 'bg-red-500 dark:text-white shadow-lg shadow-red-500/30' : 'text-gray-400'}`}>
+              <ShieldCheck size={18} /><span className="text-[8px] font-black uppercase italic tracking-tighter leading-none">Admin</span>
+            </button>
+            <button type="button" onClick={() => setActiveTab('referee')} className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${activeTab === 'referee' ? 'bg-blue-500 dark:text-white shadow-lg shadow-blue-500/30' : 'text-gray-400'}`}>
+              <Swords size={18} /><span className="text-[8px] font-black uppercase italic tracking-tighter leading-none">Referee</span>
+            </button>
+          </>
         )}
         <button type="button" onClick={() => setActiveTab('profile')} className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${activeTab === 'profile' ? 'bg-primary dark:text-white shadow-lg' : 'text-gray-400'}`}>
           <UserCircle size={18} /><span className="text-[8px] font-black uppercase italic tracking-tighter leading-none">Profile</span>

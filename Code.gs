@@ -20,6 +20,8 @@ function doGet(e) {
       case 'getEvent': return res(fetchActiveEvent());
       case 'getSettings': return getSettings();
       case 'getLeaderboard': return getLeaderboard();
+      case 'getOpenMatches': return getOpenMatches(e.parameter.tournament_url);
+      case 'getActiveEvent': return getActiveEvent();
       default: return res({ error: "Endpoint GET tidak ditemukan: " + path });
     }
   } catch (err) {
@@ -49,6 +51,10 @@ function doPost(e) {
       case 'uploadProfilePhoto': return uploadProfilePhoto(data);
       case 'updatePoints': return updatePoints(data);
       case 'toggleNicknameSetting': return toggleNicknameSetting();
+      case 'submitMatchScore': return submitMatchScore(data);
+      case 'startTournament': return startTournament(data);
+      case 'updateSwissRounds': return updateSwissRounds(data);
+      case 'exportStandings': return exportStandings(data);
       default: return res({ error: "Endpoint POST tidak ditemukan" });
     }
   } catch (err) {
@@ -476,7 +482,6 @@ function toggleNicknameSetting() {
   const idx = values.findIndex(r => String(r[0]).toLowerCase() === "allow_nickname_change");
 
   if (idx === -1) {
-    // Belum ada setting -> buat default "false"
     sheet.appendRow(["allow_nickname_change", "false"]);
     return res({ status: "success", allow_nickname_change: "false" });
   }
@@ -485,6 +490,59 @@ function toggleNicknameSetting() {
   const next = current ? "false" : "true";
   sheet.getRange(idx + 1, 2).setValue(next);
   return res({ status: "success", allow_nickname_change: next });
+}
+
+// ============================================
+// CHALLONGE SHARED HELPER
+// ============================================
+function challongeFetch(method, urlPath, bodyObj) {
+  const props = PropertiesService.getScriptProperties();
+  const apiKey = props.getProperty('CHALLONGE_API_KEY');
+  const username = props.getProperty('CHALLONGE_USERNAME') || apiKey;
+
+  if (!apiKey) {
+    throw new Error('Challonge API Key belum di-set di Script Properties GAS');
+  }
+
+  const baseUrl = 'https://api.challonge.com/v1';
+  const fullUrl = urlPath.startsWith('http') ? urlPath : baseUrl + urlPath;
+  const authHeader = 'Basic ' + Utilities.base64Encode(username + ':' + apiKey);
+
+  const options = {
+    method: method,
+    contentType: 'application/json',
+    headers: {
+      'Authorization': authHeader
+    },
+    muteHttpExceptions: true
+  };
+
+  if (bodyObj !== undefined && bodyObj !== null) {
+    options.payload = JSON.stringify(bodyObj);
+  }
+
+  try {
+    const response = UrlFetchApp.fetch(fullUrl, options);
+    const code = response.getResponseCode();
+    const text = response.getContentText();
+
+    if (code < 200 || code >= 300) {
+      console.error('Challonge API error (HTTP ' + code + '): ' + text);
+      let errorDetail = text;
+      try {
+        const parsed = JSON.parse(text);
+        errorDetail = parsed.errors ? JSON.stringify(parsed.errors) : (parsed.error ? parsed.error : text);
+      } catch (e) {
+        // keep original text if not JSON
+      }
+      return { __error: true, code: code, text: errorDetail, url: fullUrl };
+    }
+
+    return JSON.parse(text);
+  } catch (e) {
+    console.error('Challonge fetch failed: ' + e.message);
+    throw new Error('Gagal terhubung ke Challonge (' + fullUrl + '): ' + e.message);
+  }
 }
 
 // ============================================
@@ -543,25 +601,8 @@ function generateTournament(payload) {
     // default rules-nya (menghindari error "Tie breaks must be valid
     // Challonge stats" dari enum yang tidak dikenali).
 
-    // Helper: POST ke Challonge dengan api_key di dalam payload.
-    // Cek getResponseCode() dulu; jika bukan sukses (2xx) jangan JSON.parse (response bisa berupa teks "HTTP Basic...").
-    const challongeFetch = (urlPath, bodyObj) => {
-      const options = {
-        method: 'post',
-        contentType: 'application/json',
-        payload: JSON.stringify(Object.assign({ api_key: apiKey }, bodyObj)),
-        muteHttpExceptions: true
-      };
-      const response = UrlFetchApp.fetch('https://api.challonge.com/v1' + urlPath, options);
-      const code = response.getResponseCode();
-      if (code < 200 || code >= 300) {
-        return { __error: true, code: code, text: response.getContentText() };
-      }
-      return JSON.parse(response.getContentText());
-    };
-
     // 1. Buat turnamen
-    const createRes = challongeFetch('/tournaments.json', { tournament: tournamentOptions });
+    const createRes = challongeFetch('post', '/tournaments.json', { tournament: tournamentOptions });
     if (createRes.__error) {
       return res({ status: 'error', message: 'Gagal buat turnamen di Challonge (HTTP ' + createRes.code + '): ' + createRes.text });
     }
@@ -575,7 +616,7 @@ function generateTournament(payload) {
     // 2. Tambahkan peserta (skip nama kosong)
     const validParticipants = eventData.participants.filter(p => p && p.nama && String(p.nama).trim() !== '');
     for (const participant of validParticipants) {
-      const pRes = challongeFetch('/tournaments/' + tournamentId + '/participants.json', { participant: { name: String(participant.nama).trim() } });
+      const pRes = challongeFetch('post', '/tournaments/' + tournamentId + '/participants.json', { participant: { name: String(participant.nama).trim() } });
       if (pRes.__error) {
         console.error('Gagal tambah peserta ' + participant.nama + ' (HTTP ' + pRes.code + '): ' + pRes.text);
       } else if (pRes.errors) {
@@ -584,7 +625,7 @@ function generateTournament(payload) {
     }
 
     // 3. Start turnamen
-    const startRes = challongeFetch('/tournaments/' + tournamentId + '/start.json', {});
+    const startRes = challongeFetch('post', '/tournaments/' + tournamentId + '/start.json', {});
     if (startRes.__error) {
       return res({ status: 'error', message: 'Turnamen dibuat tapi gagal dimulai (HTTP ' + startRes.code + '): ' + startRes.text });
     }
@@ -622,5 +663,276 @@ function generateTournament(payload) {
 
   } catch (err) {
     return res({ status: 'error', message: 'Gagal membuat turnamen: ' + err.message });
+  }
+}
+
+// ============================================
+// CHALLONGE: AMBIL PERTANDINGAN OPEN
+// ============================================
+function getOpenMatches(tournamentUrl) {
+  try {
+    const participantsUrl = "https://api.challonge.com/v1/tournaments/" + encodeURIComponent(tournamentUrl) + "/participants.json";
+    const matchesUrl = "https://api.challonge.com/v1/tournaments/" + encodeURIComponent(tournamentUrl) + "/matches.json?state=open";
+    const completedMatchesUrl = "https://api.challonge.com/v1/tournaments/" + encodeURIComponent(tournamentUrl) + "/matches.json?state=complete&include_scores=1";
+    const tournamentUrlFull = "https://api.challonge.com/v1/tournaments/" + encodeURIComponent(tournamentUrl) + ".json";
+
+    const participantsRes = challongeFetch('get', participantsUrl);
+    if (participantsRes.__error) {
+      console.error('Gagal fetch participants: ' + participantsRes.text);
+      return res({ status: 'error', message: 'Gagal fetch participants (HTTP ' + participantsRes.code + '): ' + participantsRes.text + ' | URL: ' + participantsUrl });
+    }
+
+    const participantsRaw = Array.isArray(participantsRes) ? participantsRes : [];
+    console.log('Raw participants response type: ' + Array.isArray(participantsRaw));
+    console.log('Raw participants count: ' + participantsRaw.length);
+    console.log('Raw participants sample: ' + JSON.stringify(participantsRaw.slice(0, 2)));
+
+    const participantMap = {};
+    const participantList = participantsRaw.map(p => p.participant);
+    participantList.forEach(participant => {
+      if (participant && participant.id) {
+        participantMap[participant.id] = participant.name || ('Player ' + participant.id);
+      }
+    });
+
+    const matchesRes = challongeFetch('get', matchesUrl);
+    if (matchesRes.__error) {
+      console.error('Gagal fetch matches: ' + matchesRes.text);
+      return res({ status: 'error', message: 'Gagal fetch matches (HTTP ' + matchesRes.code + '): ' + matchesRes.text + ' | URL: ' + matchesUrl });
+    }
+
+    const matchesRaw = Array.isArray(matchesRes) ? matchesRes : [];
+    console.log('Raw matches count: ' + matchesRaw.length);
+
+    const openMatches = matchesRaw
+      .filter(m => m && m.match && String(m.match.state).toLowerCase() === 'open')
+      .map(m => {
+        const match = m.match;
+        return {
+          match_id: match.id,
+          player1_id: match.player1_id,
+          player2_id: match.player2_id,
+          player1_name: participantMap[match.player1_id] || ('Player ' + match.player1_id),
+          player2_name: participantMap[match.player2_id] || ('Player ' + match.player2_id),
+          round: match.round,
+          suggested_play_order: match.suggested_play_order
+        };
+      });
+
+    const completedMatchesRes = challongeFetch('get', completedMatchesUrl);
+    let completedMatches = [];
+    if (!completedMatchesRes.__error) {
+      const completedRaw = Array.isArray(completedMatchesRes) ? completedMatchesRes : [];
+      completedMatches = completedRaw
+        .filter(m => m && m.match && String(m.match.state).toLowerCase() === 'complete')
+        .map(m => {
+          const match = m.match;
+          return {
+            match_id: match.id,
+            player1_id: match.player1_id,
+            player2_id: match.player2_id,
+            scores_csv: match.scores_csv,
+            state: match.state
+          };
+        });
+    }
+
+    const tournamentRes = challongeFetch('get', tournamentUrlFull);
+    let tournamentState = '';
+    let swissRounds = '';
+    if (!tournamentRes.__error && tournamentRes.tournament) {
+      if (tournamentRes.tournament.state) {
+        tournamentState = tournamentRes.tournament.state;
+      }
+      if (tournamentRes.tournament.swiss_rounds != null) {
+        swissRounds = tournamentRes.tournament.swiss_rounds;
+      }
+    }
+
+    return res({ status: 'success', participants: participantList, matches: openMatches, completedMatches: completedMatches, tournamentState: tournamentState, swissRounds: swissRounds });
+  } catch (err) {
+    console.error('getOpenMatches error: ' + err.message);
+    return res({ status: 'error', message: 'Gagal getOpenMatches: ' + err.message });
+  }
+}
+
+// ============================================
+// CHALLONGE: SUBMIT MATCH SCORE
+// ============================================
+function submitMatchScore(data) {
+  try {
+    const tournamentUrl = String(data.tournament_url || '');
+    const matchId = String(data.match_id || '');
+    const scoresCsv = String(data.scores_csv || '');
+    const winnerId = String(data.winner_id || '');
+
+    if (!tournamentUrl || !matchId || !scoresCsv) {
+      return res({ status: 'error', message: 'tournament_url, match_id, dan scores_csv wajib diisi' });
+    }
+
+    const url = "https://api.challonge.com/v1/tournaments/" + encodeURIComponent(tournamentUrl) + "/matches/" + encodeURIComponent(matchId) + ".json";
+    const response = challongeFetch('put', url, {
+      match: {
+        scores_csv: scoresCsv,
+        winner_id: Number(winnerId) || undefined
+      }
+    });
+
+    if (response.__error) {
+      return res({ status: 'error', message: 'Gagal submit score (HTTP ' + response.code + '): ' + response.text + ' | URL: ' + url });
+    }
+
+    return res({ status: 'success', match: response.match || response });
+  } catch (err) {
+    console.error('submitMatchScore error: ' + err.message);
+    return res({ status: 'error', message: 'Gagal submitMatchScore: ' + err.message });
+  }
+}
+
+// ============================================
+// CHALLONGE: START TOURNAMENT
+// ============================================
+function startTournament(data) {
+  try {
+    const tournamentUrl = String(data.tournament_url || '');
+    if (!tournamentUrl) {
+      return res({ status: 'error', message: 'tournament_url wajib diisi' });
+    }
+
+    const url = "https://api.challonge.com/v1/tournaments/" + encodeURIComponent(tournamentUrl) + "/start.json";
+    const response = challongeFetch('post', url, {});
+
+    if (response.__error) {
+      return res({ status: 'error', message: 'Gagal start tournament (HTTP ' + response.code + '): ' + response.text + ' | URL: ' + url });
+    }
+
+    return res({ status: 'success', tournament: response.tournament || response });
+  } catch (err) {
+    console.error('startTournament error: ' + err.message);
+    return res({ status: 'error', message: 'Gagal startTournament: ' + err.message });
+  }
+}
+
+// ============================================
+// CHALLONGE: UPDATE SWISS ROUNDS
+// ============================================
+function updateSwissRounds(data) {
+  try {
+    const tournamentUrl = String(data.tournament_url || '');
+    const swissRounds = Number(data.swiss_rounds);
+
+    if (!tournamentUrl || isNaN(swissRounds) || swissRounds < 1) {
+      return res({ status: 'error', message: 'tournament_url dan swiss_rounds (min 1) wajib diisi' });
+    }
+
+    const url = "https://api.challonge.com/v1/tournaments/" + encodeURIComponent(tournamentUrl) + ".json";
+    const response = challongeFetch('put', url, {
+      tournament: {
+        swiss_rounds: swissRounds
+      }
+    });
+
+    if (response.__error) {
+      return res({ status: 'error', message: 'Gagal update swiss rounds (HTTP ' + response.code + '): ' + response.text + ' | URL: ' + url });
+    }
+
+    return res({ status: 'success', tournament: response.tournament || response });
+  } catch (err) {
+    console.error('updateSwissRounds error: ' + err.message);
+    return res({ status: 'error', message: 'Gagal updateSwissRounds: ' + err.message });
+  }
+}
+
+// ============================================
+// EXPORT STANDINGS KE GOOGLE SPREADSHEET
+// ============================================
+function exportStandings(data) {
+  try {
+    const sheetName = String(data.sheetName || '').trim();
+    if (!sheetName) {
+      return res({ status: 'error', message: 'Nama sheet tidak boleh kosong' });
+    }
+
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName);
+    if (!sheet) {
+      return res({ status: 'error', message: 'Sheet tidak ditemukan!' });
+    }
+
+    const LEAGUE_POINTS_DISTRIBUTION = [20, 17, 15, 13, 11, 9, 8, 7, 6, 5, 4, 3, 2, 1, 1, 1];
+    const payload = data.payload || [];
+    const optionalPoints = data.optionalPoints || {};
+
+    const suffix = (n) => {
+      const j = n % 10, k = n % 100;
+      if (j === 1 && k !== 11) return n + 'st';
+      if (j === 2 && k !== 12) return n + 'nd';
+      if (j === 3 && k !== 13) return n + 'rd';
+      return n + 'th';
+    };
+
+    const data2D = payload.map((p, index) => {
+      const opt = optionalPoints[p.id] != null ? optionalPoints[p.id] : '';
+      return [
+        suffix(index + 1),
+        LEAGUE_POINTS_DISTRIBUTION[index] || 0,
+        p.name || 'Unknown',
+        (p.wins || 0) + '-' + (p.losses || 0),
+        p.wins || 0,
+        p.pointFinish || 0,
+        opt
+      ];
+    });
+
+    sheet.getRange(3, 1, 20, 7).clearContent();
+
+    if (data2D.length > 0) {
+      sheet.getRange(3, 1, data2D.length, 7).setValues(data2D);
+    }
+
+    return res({ status: 'success', message: 'Berhasil rekap ke sheet "' + sheetName + '" (' + data2D.length + ' baris)' });
+  } catch (err) {
+    console.error('exportStandings error: ' + err.message);
+    return res({ status: 'error', message: 'Gagal exportStandings: ' + err.message });
+  }
+}
+function getActiveEvent() {
+  try {
+    const sheet = SS.getActiveSheet();
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0];
+    let activeEvent = null;
+
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+      const status = String(row[4] || '').toLowerCase();
+      if (status === 'aktif') {
+        activeEvent = {
+          eventName: String(row[1] || ''),
+          rawUrl: String(row[5] || '')
+        };
+        break;
+      }
+    }
+
+    if (!activeEvent || !activeEvent.rawUrl) {
+      return res({ status: 'error', message: 'TIDAK ADA EVENT AKTIF' });
+    }
+
+    let extractedId = activeEvent.rawUrl.trim();
+    if (extractedId.indexOf('challonge.com') !== -1) {
+      const clean = extractedId.replace(/\/+$/, '');
+      const idx = clean.lastIndexOf('/');
+      let slug = idx !== -1 ? clean.substring(idx + 1) : clean;
+      const dashIdx = slug.indexOf('-');
+      if (slug.indexOf('.') !== -1 && dashIdx !== -1) {
+        slug = slug.substring(dashIdx + 1);
+      }
+      extractedId = slug;
+    }
+
+    return res({ status: 'success', eventName: activeEvent.eventName, challongeUrl: extractedId });
+  } catch (err) {
+    console.error('getActiveEvent error: ' + err.message);
+    return res({ status: 'error', message: 'Gagal getActiveEvent: ' + err.message });
   }
 }
