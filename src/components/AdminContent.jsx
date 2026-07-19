@@ -3,7 +3,7 @@ import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
 import { ShieldCheck } from 'lucide-react';
 
-const AdminContent = ({ onCreateEvent, onResetArena, onGenerateTournament, onUpdatePoints, onToggleNickname, nicknameAllowed, leaderboard, isSubmitting, eventId }) => {
+const AdminContent = ({ onCreateEvent, onResetArena, onGenerateTournament, onUpdatePoints, onToggleNickname, nicknameAllowed, leaderboard, isSubmitting, isGenerating, isUpdatingPoints, eventId }) => {
   const [format, setFormat] = useState('weekly'); // 'weekly' | 'final'
   const [selectedId, setSelectedId] = useState('');
   const [point, setPoint] = useState('');
@@ -62,10 +62,10 @@ const AdminContent = ({ onCreateEvent, onResetArena, onGenerateTournament, onUpd
           <button
             type="button"
             onClick={() => onGenerateTournament(format)}
-            disabled={isSubmitting || !eventId}
+            disabled={isGenerating || !eventId}
             className="w-full py-4 bg-red-600 text-white rounded-2xl font-black uppercase italic text-xs shadow-lg shadow-red-600/30 active:scale-95 transition-all disabled:opacity-50 mt-2"
           >
-            {isSubmitting ? 'Generating...' : 'Generate Bracket Turnamen'}
+            {isGenerating ? 'GENERATING...' : 'Generate Bracket Turnamen'}
           </button>
         </div>
 
@@ -106,10 +106,10 @@ const AdminContent = ({ onCreateEvent, onResetArena, onGenerateTournament, onUpd
           <button
             type="button"
             onClick={handleSavePoints}
-            disabled={isSubmitting || !selectedId}
+            disabled={isUpdatingPoints || !selectedId}
             className="w-full py-3 bg-primary dark:text-white rounded-2xl font-black uppercase italic text-xs shadow-lg shadow-primary/30 active:scale-95 transition-all disabled:opacity-50"
           >
-            {isSubmitting ? 'Menyimpan...' : 'Simpan Poin'}
+            {isUpdatingPoints ? 'MENYIMPAN...' : 'Simpan Poin'}
           </button>
         </div>
 

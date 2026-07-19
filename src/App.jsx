@@ -7,7 +7,7 @@ import {
   LogOut, Loader2, MapPin, Trophy, UserCircle, ShieldCheck, Swords
 } from 'lucide-react';
 import toast, { Toaster } from 'react-hot-toast';
-import { getFromGas, postToGas, updateBio, uploadProfilePhoto, updatePoints } from './utils/api';
+import { getFromGas, postToGas, updateBio, uploadProfilePhoto, updatePoints, createTournament } from './utils/api';
 import CancelModal from './components/CancelModal';
 import CreateEventModal from './components/CreateEventModal';
 import EventCard from './components/EventCard';
@@ -27,6 +27,8 @@ export default function App() {
   const [settings, setSettings] = useState({});
   const [loading, setLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isUpdatingPoints, setIsUpdatingPoints] = useState(false);
   const [isOnboarding, setIsOnboarding] = useState(false);
   const [newNickname, setNewNickname] = useState('');
   const [activeTab, setActiveTab] = useState('arena');
@@ -128,9 +130,11 @@ export default function App() {
 
   const handleGenerateTournament = async (format = 'weekly') => {
     if (!data?.event?.id) return toast.error('Tidak ada event aktif!');
-    setIsSubmitting(true);
+    setIsGenerating(true);
     try {
-      const res = await postToGas('generateTournament', { eventId: data.event.id, format });
+      // Mapping UI format -> Challonge type untuk GAS createTournament
+      const challongeFormat = format === 'final' ? 'double elimination' : 'swiss';
+      const res = await createTournament(data.event.id, challongeFormat);
       if (res?.status === 'success') {
         toast.success('Bracket turnamen berhasil dibuat!');
         refreshEvent();
@@ -140,7 +144,7 @@ export default function App() {
     } catch {
       toast.error('Gagal generate turnamen');
     } finally {
-      setIsSubmitting(false);
+      setIsGenerating(false);
     }
   };
 
@@ -200,7 +204,7 @@ export default function App() {
   };
 
   const handleUpdatePoints = async ({ googleId, point, pointFinish }) => {
-    setIsSubmitting(true);
+    setIsUpdatingPoints(true);
     const res = await updatePoints({ googleId, point, pointFinish });
     if (res?.status === 'success') {
       toast.success('Poin pemain diupdate!');
@@ -208,7 +212,7 @@ export default function App() {
     } else {
       toast.error(res?.message || 'Gagal update poin');
     }
-    setIsSubmitting(false);
+    setIsUpdatingPoints(false);
   };
 
   const handleToggleNickname = async () => {
@@ -380,6 +384,8 @@ export default function App() {
                 nicknameAllowed={settings.allow_nickname_change === 'true'}
                 leaderboard={leaderboard}
                 isSubmitting={isSubmitting}
+                isGenerating={isGenerating}
+                isUpdatingPoints={isUpdatingPoints}
                 eventId={data?.event?.id}
               />
             ) : (

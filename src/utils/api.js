@@ -1,9 +1,9 @@
 import axios from 'axios';
 
-const GAS_URL = "https://script.google.com/macros/s/AKfycbyolTrUsuIKxtusrZUosUqNSQpUlFRYhcdDB_cQMoA3OUXV4P6Tq-gKl-ryxZyDDhJyaQ/exec";
+const GAS_URL = "https://script.google.com/macros/s/AKfycbyzEQroC3szFDkuZXpLKykv4JGKIen4JmeqyLtnbnx0hrOdlF1P-Ay-M9okIfssVkflqA/exec";
 
 const cache = new Map();
-const CACHE_TTL = 30000;
+const CACHE_TTL = 120000;
 
 export const postToGas = async (path, payload = {}) => {
   try {
@@ -57,5 +57,6 @@ export const getOpenMatches = (tournamentUrl) => {
 };
 export const submitMatchScore = (payload) => postToGas('submitMatchScore', payload);
 export const startTournament = (payload) => postToGas('startTournament', payload);
+export const createTournament = (eventId, format) => postToGas('createTournament', { eventId, format });
 export const updateSwissRounds = (payload) => postToGas('updateSwissRounds', payload);
 export const getActiveEvent = () => getFromGas('getActiveEvent');

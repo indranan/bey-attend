@@ -42,6 +42,7 @@ export default function RefereeArena() {
   const [loading, setLoading] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
   const [swissRounds, setSwissRounds] = useState('');
+  const [tournamentType, setTournamentType] = useState('');
   const [hudPhase, setHudPhase] = useState('READY');
   const [showIntro, setShowIntro] = useState(false);
   const [readyPlayers, setReadyPlayers] = useState({ p1: false, p2: false });
@@ -55,6 +56,7 @@ export default function RefereeArena() {
   const [isExporting, setIsExporting] = useState(false);
   const [activeEventName, setActiveEventName] = useState(null);
   const [isSearching, setIsSearching] = useState(true);
+  const [lastFetchTs, setLastFetchTs] = useState(0);
   const LEAGUE_POINTS_DISTRIBUTION = [20, 17, 15, 13, 11, 9, 8, 7, 6, 5, 4, 3, 2, 1, 1, 1];
 
   const resetMatch = useCallback(() => {
@@ -132,6 +134,14 @@ export default function RefereeArena() {
     const slug = extractTournamentSlug(rawUrl);
     if (!slug) return toast.error('Masukkan Tournament URL/Slug!');
     setTournamentUrl(slug);
+
+    // Throttle: skip background/auto network calls within 5s (cache already covers 120s).
+    const now = Date.now();
+    if (now - lastFetchTs < 5000 && isBackground) {
+      return;
+    }
+    setLastFetchTs(now);
+
     if (!isBackground) {
       setLoading(true);
     }
@@ -140,10 +150,22 @@ export default function RefereeArena() {
       const res = result.data;
       if (res?.status === 'success') {
         setParticipants(res.participants || []);
-        setMatches(res.matches || []);
+        const participantMap = {};
+        if (res.participants && Array.isArray(res.participants)) {
+          res.participants.forEach(p => {
+            participantMap[String(p.id)] = p.name;
+          });
+        }
+        const formattedMatches = (res.matches || []).map(match => ({
+          ...match,
+          player1_name: participantMap[String(match.player1_id)] || 'TBD',
+          player2_name: participantMap[String(match.player2_id)] || 'TBD'
+        }));
+        setMatches(formattedMatches);
         setCompletedMatches(res.completedMatches || []);
         setTournamentState(res.tournamentState || '');
         setSwissRounds(res.swissRounds != null ? res.swissRounds : '');
+        setTournamentType(res.tournamentType || '');
       } else {
         toast.error(res?.message || 'Gagal fetch data');
       }
@@ -187,6 +209,9 @@ export default function RefereeArena() {
       const res = await startTournament({ tournament_url: slug });
       if (res?.status === 'success') {
         toast.success('Turnamen Dimulai!');
+        setTournamentState('underway');
+        setMatches([]);
+        setParticipants([]);
         await new Promise(resolve => setTimeout(resolve, 2500));
         await handleFetchMatches(tournamentUrl);
       } else {
@@ -366,7 +391,6 @@ export default function RefereeArena() {
         resetMatch();
         setHudPhase('POST_MATCH');
         await new Promise(resolve => setTimeout(resolve, 2500));
-        await handleFetchMatches(true);
       } else {
         toast.error(res?.message || 'Gagal submit skor');
       }
@@ -464,16 +488,16 @@ export default function RefereeArena() {
   const leagueStandings = computeStandings(participants, completedMatches);
 
   return (
-    <div className="min-h-screen bg-black text-blue-400 font-mono">
+      <div className="min-h-screen bg-transparent text-blue-400 font-mono">
       {/* STATE 1: MATCH SELECTOR */}
       {state === 'selector' && (
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="max-w-md mx-auto p-6 space-y-6">
           <div className="text-center space-y-2">
-            <h2 className="text-3xl font-black italic tracking-tighter text-blue-400">REFEREE HUD</h2>
-            <p className="text-[10px] text-blue-400/60 font-black uppercase tracking-[0.3em]">Arena Scoreboard // Challonge Link</p>
+            <h2 className="text-3xl md:text-4xl font-black text-white italic tracking-wider uppercase mb-1 drop-shadow-md">REFEREE HUD</h2>
+            <p className="text-[10px] md:text-xs font-bold text-slate-400 tracking-[0.3em] uppercase mb-8">Arena Scoreboard // Challonge Link</p>
           </div>
 
-          <div className="bg-gray-900 border border-blue-400/20 rounded-[2rem] p-6 space-y-4">
+          <div className="w-full p-6 md:p-8 rounded-[2rem] bg-slate-800/30 border border-white/5 shadow-sm flex flex-col items-center">
             {isSearching && (
               <div className="text-center">
                 <p className="text-sm font-black uppercase tracking-widest text-orange-400 animate-pulse">MENCARI EVENT AKTIF...</p>
@@ -485,44 +509,39 @@ export default function RefereeArena() {
               </div>
             )}
             {!isSearching && activeEventName && (
-              <div className="text-center">
-                <p className="text-[10px] font-black text-blue-400/60 uppercase tracking-widest mb-1">Arena Scoreboard</p>
-                <div className="flex items-center justify-center gap-2">
-                  <p className="text-lg font-black uppercase tracking-widest text-green-400">ACTIVE EVENT: {activeEventName}</p>
-                  <button
-                    type="button"
-                    onClick={() => handleFetchMatches(tournamentUrl)}
-                    disabled={loading}
-                    title="Refresh data"
-                    className="p-1.5 rounded-lg border border-blue-400/40 text-blue-400 hover:bg-blue-400/10 active:scale-95 transition-all disabled:opacity-50"
-                  >
-                    🔄
-                  </button>
-                </div>
+              <div className="flex flex-col items-center justify-center w-full gap-2">
+                <p className="text-[10px] font-black text-blue-400/60 uppercase tracking-widest">Arena Scoreboard</p>
+                <p className="text-[10px] md:text-xs font-bold text-slate-500 tracking-[0.2em] uppercase">Active Event</p>
+                <p className="text-xl lg:text-2xl font-black text-green-400 drop-shadow-[0_0_10px_rgba(74,222,128,0.4)] tracking-wide uppercase text-center px-4">{activeEventName}</p>
+                <button
+                  type="button"
+                  onClick={() => handleFetchMatches(tournamentUrl)}
+                  disabled={loading}
+                  title="Refresh data"
+                  className="flex items-center justify-center gap-2 px-5 py-2 mt-2 rounded-full bg-slate-800/80 border border-slate-600 hover:bg-blue-600 hover:border-blue-400 transition-colors text-xs font-bold text-slate-300 hover:text-white uppercase tracking-widest disabled:opacity-50"
+                >
+                  🔄 SYNC MATCHES
+                </button>
               </div>
             )}
           </div>
 
-          {!loading && Array.isArray(matches) && matches.length > 0 && (
-            <div className="bg-gray-900 border border-blue-400/20 rounded-[2rem] p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <label className="text-[10px] font-black text-blue-400/80 uppercase tracking-widest">Swiss Rounds</label>
+          {!loading && Array.isArray(matches) && matches.length > 0 && tournamentType === 'swiss' && (
+            <div className="w-full p-6 md:p-8 rounded-[2rem] bg-slate-800/30 border border-white/5 shadow-sm flex flex-col items-center justify-center gap-3">
+              <label className="text-xs lg:text-sm font-bold text-slate-400 tracking-widest uppercase text-center">Swiss Rounds</label>
+              <div className="flex items-center gap-2">
                 <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    min="1"
-                    value={swissRounds}
-                    onChange={(e) => setSwissRounds(Math.max(1, Number(e.target.value) || 1))}
-                    className="w-16 p-2 bg-black border-2 border-blue-400/30 rounded-xl text-blue-400 font-black text-center text-sm outline-none focus:border-blue-400"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleUpdateSwissRounds}
-                    className="px-3 py-2 bg-blue-400 text-black rounded-xl font-black text-[10px] uppercase tracking-widest active:scale-95 transition-all"
-                  >
-                    SIMPAN
-                  </button>
+                  <button onClick={() => setSwissRounds(prev => Math.max(1, Number(prev) - 1))} className="w-10 h-10 md:w-12 md:h-12 bg-slate-800 border border-slate-600 rounded-lg text-white font-bold hover:bg-slate-700 flex items-center justify-center transition-colors">-</button>
+                  <input type="number" readOnly value={swissRounds} className="w-12 h-10 md:h-12 bg-slate-900 border border-slate-700 rounded-lg text-center text-white font-bold focus:outline-none pointer-events-none" />
+                  <button onClick={() => setSwissRounds(prev => Number(prev) + 1)} className="w-10 h-10 md:w-12 md:h-12 bg-slate-800 border border-slate-600 rounded-lg text-white font-bold hover:bg-slate-700 flex items-center justify-center transition-colors">+</button>
                 </div>
+                <button
+                  type="button"
+                  onClick={handleUpdateSwissRounds}
+                  className="px-4 md:px-6 h-10 md:h-12 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs lg:text-sm tracking-widest uppercase transition-colors shadow-lg shadow-blue-500/20 border border-blue-500"
+                >
+                  SIMPAN
+                </button>
               </div>
             </div>
           )}
@@ -570,23 +589,33 @@ export default function RefereeArena() {
                       key={m.match_id}
                       type="button"
                       onClick={() => handleSelectMatch(m)}
-                      className="w-full p-4 bg-gray-900 border border-blue-400/20 rounded-2xl text-left active:scale-[0.98] transition-all hover:border-blue-400/50"
+                      className="w-full p-5 md:p-6 rounded-3xl bg-slate-800/30 border border-white/5 hover:border-white/10 hover:bg-slate-700/40 transition-all duration-300 flex flex-col gap-1 cursor-pointer group"
                     >
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="font-black text-sm text-blue-400 tracking-tighter">Partai {idx + 1}</p>
-                          <p className="font-black text-sm text-blue-400 tracking-tighter">{m.player1_name}</p>
-                          <p className="text-[10px] text-blue-400/40 font-bold uppercase tracking-widest">VS</p>
-                          <p className="font-black text-sm text-blue-400 tracking-tighter">{m.player2_name}</p>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-[9px] text-blue-400/40 font-black uppercase">Babak {m.round}</p>
-                          <p className="text-[9px] text-blue-400/40 font-black uppercase">#{m.match_id}</p>
-                        </div>
+                      <div className="w-full flex flex-col items-center justify-center border-b border-white/5 pb-3 mb-3">
+                        <span className="text-xs lg:text-sm font-black text-blue-400 tracking-widest uppercase mb-1">
+                          ROUND {m.round} • MATCH {idx + 1}
+                        </span>
+                      </div>
+                      <div className="flex flex-col items-center justify-center w-full text-center mt-2">
+                        <p className="text-lg md:text-xl font-black text-white group-hover:text-blue-300 transition-colors tracking-tight text-center">{m.player1_name}</p>
+                        <p className="text-xs font-bold italic text-red-500/80 my-1 text-center">VS</p>
+                        <p className="text-lg md:text-xl font-black text-white group-hover:text-blue-300 transition-colors tracking-tight text-center">{m.player2_name}</p>
                       </div>
                     </button>
                   ))}
                 </motion.div>
+              )}
+
+              {tournamentState === 'underway' && !loading && Array.isArray(matches) && matches.length === 0 && (
+                <div className="w-full max-w-2xl mx-auto bg-slate-900/50 border border-slate-700 border-dashed rounded-2xl p-8 lg:p-12 flex flex-col items-center justify-center gap-3 mt-4">
+                  <span className="text-4xl lg:text-5xl opacity-50 mb-2">📭</span>
+                  <p className="text-slate-400 font-bold tracking-widest uppercase text-xs lg:text-sm text-center">
+                    No Open Matches Available
+                  </p>
+                  <p className="text-slate-500 text-[10px] lg:text-xs text-center max-w-xs">
+                    API returned empty matches. Please check your Challonge bracket state (are matches pending or waiting to be started?).
+                  </p>
+                </div>
               )}
 
               {(tournamentState === 'complete' || tournamentState === 'awaiting_review') && !loading && leagueStandings.length > 0 && (
@@ -887,87 +916,95 @@ export default function RefereeArena() {
 
           {hudPhase === 'PREVIEW' && (
             <motion.div
-              className="absolute inset-0 z-50 flex flex-col items-center justify-start lg:justify-center w-full h-full overflow-y-auto bg-black/95 backdrop-blur-md p-4 lg:p-8 pt-8 lg:pt-0"
+              className="absolute inset-0 z-50 flex items-center justify-center w-full h-full overflow-y-auto bg-black/95 backdrop-blur-md p-4 lg:p-8"
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               transition={{ duration: 0.5, type: 'spring' }}
             >
-              <div className="w-full max-w-5xl flex flex-col items-center my-auto">
-                {/* Header Pemenang */}
-                <div className="flex flex-col items-center justify-center mb-4 lg:mb-8 mt-2 lg:mt-0">
-                  <h2 className="text-sm lg:text-2xl font-bold tracking-[0.4em] text-green-400 mb-2 lg:mb-6 uppercase">
+              {/* CONTAINER UTAMA (Max Width membatasi agar tidak mepet layar) */}
+              <div className="w-full max-w-4xl mx-auto flex flex-col items-center justify-center py-4 lg:py-0">
+                
+                {/* HEADER PEMENANG */}
+                <div className="flex flex-col items-center justify-center mb-4 lg:mb-10 w-full">
+                  <h2 className="text-[10px] lg:text-sm font-bold text-green-500 tracking-[0.3em] lg:tracking-[0.5em] uppercase mb-2 animate-pulse text-center">
                     Match Winner
                   </h2>
-                  <div className="flex items-center justify-center gap-4 lg:gap-8">
+                  <div className="flex flex-row items-center justify-center gap-3 lg:gap-6 text-3xl lg:text-7xl font-black text-yellow-400 drop-shadow-[0_0_15px_rgba(250,204,21,0.6)] italic tracking-tight w-full px-4">
                     <motion.div
-                      className="text-yellow-400 drop-shadow-[0_0_15px_#facc15] flex items-center"
-                      animate={{ y: [0, -8, 0] }}
+                      className="text-yellow-400 drop-shadow-[0_0_20px_rgba(250,204,21,0.6)] flex items-center flex-shrink-0"
+                      animate={{ y: [0, -6, 0] }}
                       transition={{ repeat: Infinity, duration: 2 }}
                     >
-                      <Trophy className="w-12 h-12 lg:w-24 lg:h-24"/>
+                      <Trophy className="w-8 h-8 lg:w-16 lg:h-16"/>
                     </motion.div>
-                    <p className="text-4xl lg:text-8xl font-black italic text-transparent bg-clip-text bg-gradient-to-r from-yellow-300 to-yellow-600 drop-shadow-[0_0_20px_rgba(234,179,8,0.5)] uppercase leading-none pt-2">
-                      {winnerName}
-                    </p>
+                    <p className="truncate max-w-full text-center">{winnerName}</p>
                   </div>
                 </div>
 
-                <div className="w-full max-w-4xl mt-3 lg:mt-8 bg-slate-900/50 border border-slate-700/50 rounded-2xl p-3 lg:p-8 backdrop-blur-sm shadow-2xl flex flex-col">
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="text-center flex-1">
-                      <p className="text-[10px] text-blue-400/60 font-black uppercase tracking-widest mb-1">P1</p>
-                      <p className="text-xs lg:text-base font-black tracking-tighter mb-4">{selectedMatch.player1_name}</p>
-                      <div className="flex items-center justify-center gap-2">
-                        <motion.button
-                          whileTap={{ scale: 0.8 }}
-                          onClick={() => adjustPreviewScore('p1', -1)}
-                          className="w-8 h-8 lg:w-12 lg:h-12 flex items-center justify-center rounded-lg bg-slate-800 border border-slate-600 text-slate-300 hover:bg-slate-700 hover:text-white transition-colors text-lg lg:text-2xl font-bold"
-                        >
-                          -
-                        </motion.button>
-                        <span className="text-4xl lg:text-6xl font-black text-blue-400 drop-shadow-[0_0_15px_#3b82f6] w-24 text-center">{previewScores?.p1 ?? 0}</span>
-                        <motion.button
-                          whileTap={{ scale: 0.8 }}
-                          onClick={() => adjustPreviewScore('p1', 1)}
-                          className="w-8 h-8 lg:w-12 lg:h-12 flex items-center justify-center rounded-lg bg-slate-800 border border-slate-600 text-slate-300 hover:bg-slate-700 hover:text-white transition-colors text-lg lg:text-2xl font-bold"
-                        >
-                          +
-                        </motion.button>
-                      </div>
-                    </div>
-                    <span className="text-2xl font-black text-blue-400/30">:</span>
-                    <div className="text-center flex-1">
-                      <p className="text-[10px] text-blue-400/60 font-black uppercase tracking-widest mb-1">P2</p>
-                      <p className="text-xs lg:text-base font-black tracking-tighter mb-4">{selectedMatch.player2_name}</p>
-                      <div className="flex items-center justify-center gap-2">
-                        <motion.button
-                          whileTap={{ scale: 0.8 }}
-                          onClick={() => adjustPreviewScore('p2', -1)}
-                          className="w-8 h-8 lg:w-12 lg:h-12 flex items-center justify-center rounded-lg bg-slate-800 border border-slate-600 text-slate-300 hover:bg-slate-700 hover:text-white transition-colors text-lg lg:text-2xl font-bold"
-                        >
-                          -
-                        </motion.button>
-                        <span className="text-4xl lg:text-6xl font-black text-blue-400 drop-shadow-[0_0_15px_#3b82f6] w-24 text-center">{previewScores?.p2 ?? 0}</span>
-                        <motion.button
-                          whileTap={{ scale: 0.8 }}
-                          onClick={() => adjustPreviewScore('p2', 1)}
-                          className="w-8 h-8 lg:w-12 lg:h-12 flex items-center justify-center rounded-lg bg-slate-800 border border-slate-600 text-slate-300 hover:bg-slate-700 hover:text-white transition-colors text-lg lg:text-2xl font-bold"
-                        >
-                          +
-                        </motion.button>
-                      </div>
+                {/* SCOREBOARD: FLEX-1 BALANCING */}
+                <div className="w-full flex flex-row items-stretch justify-center gap-3 lg:gap-8 px-2 lg:px-0">
+                  
+                  {/* PLAYER 1 CARD */}
+                  <div className="flex-1 bg-slate-900/80 border border-slate-700 rounded-2xl lg:rounded-[2rem] p-3 py-5 lg:p-8 flex flex-col items-center justify-center gap-3 lg:gap-6 shadow-xl overflow-hidden min-w-0">
+                    <p className="text-[9px] lg:text-xs font-bold text-slate-500 tracking-widest uppercase">Player 1</p>
+                    <p className="text-sm lg:text-2xl font-black text-white text-center leading-tight truncate w-full px-1">{selectedMatch.player1_name}</p>
+                    <div className="flex items-center gap-3 lg:gap-6 mt-1 lg:mt-2">
+                      <motion.button
+                        whileTap={{ scale: 0.8 }}
+                        onClick={() => adjustPreviewScore('p1', -1)}
+                        className="w-10 h-10 lg:w-14 lg:h-14 bg-slate-800 border-2 border-slate-600 rounded-lg lg:rounded-2xl flex items-center justify-center text-lg lg:text-2xl font-bold text-slate-300 hover:bg-blue-600 hover:border-blue-400 hover:text-white transition-all flex-shrink-0"
+                      >
+                        -
+                      </motion.button>
+                      <span className="text-3xl lg:text-5xl font-black text-white w-8 lg:w-16 text-center">{previewScores?.p1 ?? 0}</span>
+                      <motion.button
+                        whileTap={{ scale: 0.8 }}
+                        onClick={() => adjustPreviewScore('p1', 1)}
+                        className="w-10 h-10 lg:w-14 lg:h-14 bg-slate-800 border-2 border-slate-600 rounded-lg lg:rounded-2xl flex items-center justify-center text-lg lg:text-2xl font-bold text-slate-300 hover:bg-blue-600 hover:border-blue-400 hover:text-white transition-all flex-shrink-0"
+                      >
+                        +
+                      </motion.button>
                     </div>
                   </div>
-                  <p className="text-center text-[10px] text-blue-400/40 font-black uppercase tracking-widest mt-4">Score CSV: {(previewScores?.p1 ?? 0)}-{(previewScores?.p2 ?? 0)}</p>
+
+                  {/* SEPARATOR (Desktop Only) */}
+                  <div className="hidden lg:flex flex-col justify-center items-center">
+                     <span className="text-5xl font-black text-slate-600 pb-12">:</span>
+                  </div>
+
+                  {/* PLAYER 2 CARD */}
+                  <div className="flex-1 bg-slate-900/80 border border-slate-700 rounded-2xl lg:rounded-[2rem] p-3 py-5 lg:p-8 flex flex-col items-center justify-center gap-3 lg:gap-6 shadow-xl overflow-hidden min-w-0">
+                    <p className="text-[9px] lg:text-xs font-bold text-slate-500 tracking-widest uppercase">Player 2</p>
+                    <p className="text-sm lg:text-2xl font-black text-white text-center leading-tight truncate w-full px-1">{selectedMatch.player2_name}</p>
+                    <div className="flex items-center gap-3 lg:gap-6 mt-1 lg:mt-2">
+                      <motion.button
+                        whileTap={{ scale: 0.8 }}
+                        onClick={() => adjustPreviewScore('p2', -1)}
+                        className="w-10 h-10 lg:w-14 lg:h-14 bg-slate-800 border-2 border-slate-600 rounded-lg lg:rounded-2xl flex items-center justify-center text-lg lg:text-2xl font-bold text-slate-300 hover:bg-blue-600 hover:border-blue-400 hover:text-white transition-all flex-shrink-0"
+                      >
+                        -
+                      </motion.button>
+                      <span className="text-3xl lg:text-5xl font-black text-white w-8 lg:w-16 text-center">{previewScores?.p2 ?? 0}</span>
+                      <motion.button
+                        whileTap={{ scale: 0.8 }}
+                        onClick={() => adjustPreviewScore('p2', 1)}
+                        className="w-10 h-10 lg:w-14 lg:h-14 bg-slate-800 border-2 border-slate-600 rounded-lg lg:rounded-2xl flex items-center justify-center text-lg lg:text-2xl font-bold text-slate-300 hover:bg-blue-600 hover:border-blue-400 hover:text-white transition-all flex-shrink-0"
+                      >
+                        +
+                      </motion.button>
+                    </div>
+                  </div>
+
                 </div>
 
-                <div className="w-full max-w-4xl flex gap-4 mt-3 lg:mt-6 mb-8">
+                {/* ACTION BUTTONS */}
+                <div className="w-full flex flex-row gap-3 lg:gap-6 mt-6 lg:mt-12 px-2 lg:px-0">
                   <motion.button
                     type="button"
                     onClick={resetMatch}
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.95 }}
-                    className="flex-1 py-2 lg:py-5 rounded-xl border border-slate-700 bg-slate-900/80 text-slate-400 hover:text-white hover:bg-slate-800 transition-colors uppercase tracking-widest font-bold text-xs lg:text-lg"
+                    className="flex-1 py-3 lg:py-5 bg-slate-800 rounded-xl lg:rounded-2xl border-2 border-slate-600 text-slate-300 text-xs lg:text-sm font-bold tracking-widest hover:bg-slate-700 transition-colors uppercase"
                   >
                     Cancel
                   </motion.button>
@@ -977,14 +1014,13 @@ export default function RefereeArena() {
                     disabled={submitting}
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.95 }}
-                    animate={!submitting ? { boxShadow: ['0 0 20px #2563EB', '0 0 40px #2563EB', '0 0 20px #2563EB'] } : {}}
-                    transition={!submitting ? { repeat: Infinity, duration: 2 } : {}}
-                    className="flex-[2] py-2 lg:py-5 rounded-xl bg-blue-600 text-white uppercase tracking-widest font-black text-xs lg:text-lg shadow-lg shadow-blue-500/40 border border-blue-500 hover:bg-blue-500 transition-colors flex items-center justify-center gap-3 disabled:opacity-50"
+                    className="flex-[2] py-3 lg:py-5 bg-blue-600 rounded-xl lg:rounded-2xl border border-blue-500 text-white text-xs lg:text-sm font-black tracking-widest hover:bg-blue-500 shadow-[0_0_20px_rgba(37,99,235,0.4)] transition-all active:scale-95 uppercase flex items-center justify-center gap-2 lg:gap-3 disabled:opacity-50"
                   >
-                    {submitting ? <Loader2 className="animate-spin" size={18}/> : <Trophy size={18}/>}
-                    {submitting ? 'Submitting...' : 'Submit to Challonge'}
+                    {submitting ? <Loader2 className="animate-spin w-4 h-4 lg:w-5 lg:h-5"/> : <Trophy className="w-4 h-4 lg:w-5 lg:h-5"/>}
+                    <span className="truncate">{submitting ? 'Submitting...' : 'Submit Score'}</span>
                   </motion.button>
                 </div>
+
               </div>
             </motion.div>
           )}
@@ -1027,10 +1063,10 @@ export default function RefereeArena() {
                       >
                         <div className="flex items-center justify-between">
                           <div className="flex-1 min-w-0">
-                            <p className="text-xs md:text-sm font-black text-blue-400 tracking-widest uppercase mb-1">BABAK {match.round} • MATCH {index + 1}</p>
-                            <p className="text-xl md:text-2xl font-black text-white group-hover:text-blue-300 transition-colors tracking-tight truncate">{match.player1_name}</p>
+                            <p className="text-xs lg:text-sm font-black text-blue-400 tracking-widest uppercase mb-1">ROUND {match.round} • MATCH {match.identifier || match.suggested_play_order || index + 1}</p>
+                            <p className="text-xl lg:text-2xl font-black text-white group-hover:text-blue-300 transition-colors tracking-tight truncate">{match.player1_name}</p>
                             <p className="text-sm font-bold italic text-red-500/80 my-1">VS</p>
-                            <p className="text-xl md:text-2xl font-black text-white group-hover:text-blue-300 transition-colors tracking-tight truncate">{match.player2_name}</p>
+                            <p className="text-xl lg:text-2xl font-black text-white group-hover:text-blue-300 transition-colors tracking-tight truncate">{match.player2_name}</p>
                           </div>
                           <div className="text-right ml-4">
                           </div>
