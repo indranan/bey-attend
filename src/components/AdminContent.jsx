@@ -3,8 +3,9 @@ import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
 import { ShieldCheck } from 'lucide-react';
 
-const AdminContent = ({ onCreateEvent, onResetArena, onGenerateTournament, onUpdatePoints, onToggleNickname, nicknameAllowed, leaderboard, isSubmitting, eventId }) => {
+const AdminContent = ({ onCreateEvent, onResetArena, onGenerateTournament, onUpdatePoints, onToggleNickname, nicknameAllowed, leaderboard, isSubmitting, isGenerating, isUpdatingPoints, eventId }) => {
   const [format, setFormat] = useState('weekly'); // 'weekly' | 'final'
+  const [newSwissRounds, setNewSwissRounds] = useState(3);
   const [selectedId, setSelectedId] = useState('');
   const [point, setPoint] = useState('');
   const [pointFinish, setPointFinish] = useState('');
@@ -59,13 +60,33 @@ const AdminContent = ({ onCreateEvent, onResetArena, onGenerateTournament, onUpd
               ? 'Swiss • Tie break: menang pertandingan, poin, head-to-head'
               : 'Double Elimination • Grand Finals 1 Match'}
           </p>
+          {format === 'weekly' && (
+            <div className="flex flex-col items-center mb-4 mt-3">
+              <span className="text-xs text-blue-500 font-bold mb-2 tracking-widest">JUMLAH SWISS ROUNDS</span>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setNewSwissRounds(prev => Math.max(1, Number(prev) - 1))}
+                  className="w-10 h-10 bg-slate-200 dark:bg-slate-800 rounded-lg text-gray-800 dark:text-white font-bold hover:bg-slate-300 dark:hover:bg-slate-700 transition-colors"
+                >-</button>
+                <div className="w-12 h-10 bg-gray-100 dark:bg-slate-900 rounded-lg flex items-center justify-center text-gray-900 dark:text-white font-bold border border-gray-300 dark:border-slate-700">
+                  {newSwissRounds}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setNewSwissRounds(prev => Number(prev) + 1)}
+                  className="w-10 h-10 bg-slate-200 dark:bg-slate-800 rounded-lg text-gray-800 dark:text-white font-bold hover:bg-slate-300 dark:hover:bg-slate-700 transition-colors"
+                >+</button>
+              </div>
+            </div>
+          )}
           <button
             type="button"
-            onClick={() => onGenerateTournament(format)}
-            disabled={isSubmitting || !eventId}
+            onClick={() => onGenerateTournament({ format, swissRounds: newSwissRounds })}
+            disabled={isGenerating || !eventId}
             className="w-full py-4 bg-red-600 text-white rounded-2xl font-black uppercase italic text-xs shadow-lg shadow-red-600/30 active:scale-95 transition-all disabled:opacity-50 mt-2"
           >
-            {isSubmitting ? 'Generating...' : 'Generate Bracket Turnamen'}
+            {isGenerating ? 'GENERATING...' : 'Generate Bracket Turnamen'}
           </button>
         </div>
 
@@ -106,10 +127,10 @@ const AdminContent = ({ onCreateEvent, onResetArena, onGenerateTournament, onUpd
           <button
             type="button"
             onClick={handleSavePoints}
-            disabled={isSubmitting || !selectedId}
+            disabled={isUpdatingPoints || !selectedId}
             className="w-full py-3 bg-primary dark:text-white rounded-2xl font-black uppercase italic text-xs shadow-lg shadow-primary/30 active:scale-95 transition-all disabled:opacity-50"
           >
-            {isSubmitting ? 'Menyimpan...' : 'Simpan Poin'}
+            {isUpdatingPoints ? 'MENYIMPAN...' : 'Simpan Poin'}
           </button>
         </div>
 

@@ -1,7 +1,9 @@
 import axios from 'axios';
 
-const GAS_URL = "https://script.google.com/macros/s/AKfycbwTUt8yMgrrVYCpLZCpOKdYiEpsKN7WcLzcOigtoJqMsqIrIVeK57tyrTRvaPjRt47Gvw/exec";
+const GAS_URL = "https://script.google.com/macros/s/AKfycbzFfd7QYbLBpUFEtdfIFCgL8c5twSGyERPaGAs6li52Vy4Ed7L_l0rU5McJ8pARnhom/exec";
 
+const cache = new Map();
+const CACHE_TTL = 120000;
 
 export const postToGas = async (path, payload = {}) => {
   try {
@@ -16,9 +18,15 @@ export const postToGas = async (path, payload = {}) => {
 };
 
 export const getFromGas = async (path) => {
+  const cached = cache.get(path);
+  if (cached && Date.now() - cached.time < CACHE_TTL) {
+    return cached.data;
+  }
   try {
     const res = await axios.get(`${GAS_URL}?path=${path}&_t=${Date.now()}`);
-    return res.data;
+    const data = res.data;
+    cache.set(path, { data, time: Date.now() });
+    return data;
   } catch (err) {
     console.warn(`GAS ${path} request failed:`, err?.message || err);
     return null;
@@ -31,3 +39,29 @@ export const uploadProfilePhoto = (payload) => postToGas('uploadProfilePhoto', p
 
 // --- Admin ---
 export const updatePoints = (payload) => postToGas('updatePoints', payload);
+
+// --- Challonge ---
+export const getOpenMatches = (tournamentUrl) => {
+  const path = `getOpenMatches&tournament_url=${encodeURIComponent(tournamentUrl)}`;
+  const cached = cache.get(path);
+  if (cached && Date.now() - cached.time < CACHE_TTL) {
+    return { data: cached.data, raw: null };
+  }
+  return axios.get(`${GAS_URL}?path=${path}&_t=${Date.now()}`).then(res => {
+    cache.set(path, { data: res.data, time: Date.now() });
+    return { data: res.data, raw: res };
+  }).catch(err => {
+    console.warn(`GAS ${path} request failed:`, err?.message || err);
+    return { data: null, raw: null };
+  });
+};
+export const submitMatchScore = (payload) => postToGas('submitMatchScore', payload);
+export const startTournament = (payload) => postToGas('startTournament', payload);
+export const createTournament = (eventId, format, swissRounds) => postToGas('createTournament', {
+  eventId,
+  format,
+  ...(swissRounds != null ? { swiss_rounds: swissRounds } : {})
+});
+export const updateSwissRounds = (payload) => postToGas('updateSwissRounds', payload);
+export const getActiveEvent = () => getFromGas('getActiveEvent');
+export const manualSync = (payload) => postToGas('manualSync', payload);

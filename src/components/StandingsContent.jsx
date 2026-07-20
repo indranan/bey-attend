@@ -18,6 +18,15 @@ const StandingsContent = ({ leaderboard, user, onSelect }) => {
     );
   }
 
+  const sortedLeaderboard = [...leaderboard].sort((a, b) => {
+    const ptsA = Number(a.point) || 0;
+    const ptsB = Number(b.point) || 0;
+    if (ptsB !== ptsA) return ptsB - ptsA;
+    const finA = Number(a.pointFinish) || 0;
+    const finB = Number(b.pointFinish) || 0;
+    return finB - finA;
+  });
+
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6 pb-20">
       <div className="text-center">
@@ -35,7 +44,7 @@ const StandingsContent = ({ leaderboard, user, onSelect }) => {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-            {leaderboard.map((item, index) => {
+            {sortedLeaderboard.map((item, index) => {
               const rank = index + 1;
               const isMe = item.googleId === user?.sub;
               return (
