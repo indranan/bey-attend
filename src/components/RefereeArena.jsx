@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Loader2, Trophy, Swords, RotateCcw, Maximize, Smartphone } from 'lucide-react';
+import { Loader2, Trophy, Swords, RotateCcw, Maximize, Smartphone, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { getOpenMatches, submitMatchScore, startTournament, updateSwissRounds, getActiveEvent, postToGas } from '../utils/api';
+import { getOpenMatches, submitMatchScore, startTournament, getActiveEvent, postToGas } from '../utils/api';
 import MatchIntro from './MatchIntro';
 
 const initialState = {
@@ -41,7 +41,6 @@ export default function RefereeArena() {
   const [previewScores, setPreviewScores] = useState(initialState.previewScores);
   const [loading, setLoading] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
-  const [swissRounds, setSwissRounds] = useState('');
   const [tournamentType, setTournamentType] = useState('');
   const [hudPhase, setHudPhase] = useState('READY');
   const [showIntro, setShowIntro] = useState(false);
@@ -54,10 +53,22 @@ export default function RefereeArena() {
   const [completedMatches, setCompletedMatches] = useState([]);
   const [optionalPoints, setOptionalPoints] = useState({});
   const [isExporting, setIsExporting] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportSheetName, setExportSheetName] = useState('');
   const [activeEventName, setActiveEventName] = useState(null);
+  const [activeEventWaktu, setActiveEventWaktu] = useState('');
   const [isSearching, setIsSearching] = useState(true);
   const [lastFetchTs, setLastFetchTs] = useState(0);
+  const [isSyncing, setIsSyncing] = useState(false);
   const LEAGUE_POINTS_DISTRIBUTION = [20, 17, 15, 13, 11, 9, 8, 7, 6, 5, 4, 3, 2, 1, 1, 1];
+
+  const bgmRef = useRef(typeof Audio !== "undefined" ? new Audio('/bgm.mp3') : null);
+  const mwinRef = useRef(typeof Audio !== "undefined" ? new Audio('/mwin.mp3') : null);
+  const waitPlayerReadyRef = useRef(typeof Audio !== "undefined" ? new Audio('/waitplayerready.mp3') : null);
+  const duckingTimeoutRef = useRef(null);
+  const BGM_BASE_VOLUME = 0.7;
+  const BGM_DUCK_VOLUME = 0.08;
+  const DUCK_DURATION = 2000;
 
   const resetMatch = useCallback(() => {
     setScores({ p1: 0, p2: 0 });
@@ -79,16 +90,73 @@ export default function RefereeArena() {
   }, []);
 
   useEffect(() => {
+    const bgmScore = bgmRef.current;
+    const bgmWinner = mwinRef.current;
+    const bgmReady = waitPlayerReadyRef.current;
+
+    if (bgmWinner) bgmWinner.loop = false;
+    if (bgmScore) bgmScore.loop = true;
+    if (bgmReady) bgmReady.loop = true;
+
+    const isBothReady = readyPlayers.p1 && readyPlayers.p2;
+
+    let activeAudio = null;
+
+    if (hudPhase === 'SCORE') {
+      if (!isBothReady && bgmReady) {
+        activeAudio = bgmReady;
+      } else if (isBothReady && bgmScore) {
+        activeAudio = bgmScore;
+      }
+    } else if (hudPhase === 'PREVIEW' && bgmWinner) {
+      activeAudio = bgmWinner;
+    }
+
+    const allAudios = [bgmScore, bgmWinner, bgmReady];
+    allAudios.forEach(audio => {
+      if (audio && audio !== activeAudio) {
+        audio.pause();
+        audio.currentTime = 0;
+      }
+    });
+
+    if (activeAudio) {
+      if (activeAudio === bgmScore) activeAudio.volume = BGM_BASE_VOLUME;
+      else if (activeAudio === bgmReady) activeAudio.volume = 0.5;
+      else if (activeAudio === bgmWinner) activeAudio.volume = 1;
+      activeAudio.play().catch(e => console.warn("Autoplay blocked:", e));
+    }
+
+    return () => {
+      allAudios.forEach(audio => {
+        if (audio) {
+          audio.pause();
+        }
+      });
+    };
+  }, [hudPhase, state, selectedMatch, readyPlayers]);
+
+  useEffect(() => {
+    if (showIntro) {
+      const readySfx = new Audio('/readyset.mp3');
+      readySfx.volume = 0.8;
+      readySfx.play().catch(err => console.warn("Readyset SFX autoplay blocked:", err));
+    }
+  }, [showIntro]);
+
+  useEffect(() => {
     const loadActiveEvent = async () => {
       setIsSearching(true);
       try {
         const res = await getActiveEvent();
         if (res?.status === 'success' && res.challongeUrl) {
           setActiveEventName(res.eventName || null);
+          setActiveEventWaktu(res.waktu || '');
           setTournamentUrl(res.challongeUrl);
           await handleFetchMatches(res.challongeUrl);
         } else {
           setActiveEventName(null);
+          setActiveEventWaktu('');
         }
       } catch (err) {
         console.error('Gagal load active event:', err);
@@ -161,10 +229,9 @@ export default function RefereeArena() {
           player1_name: participantMap[String(match.player1_id)] || 'TBD',
           player2_name: participantMap[String(match.player2_id)] || 'TBD'
         }));
-        setMatches(formattedMatches);
+        setMatches([...formattedMatches].sort((a, b) => (a.suggested_play_order ?? 0) - (b.suggested_play_order ?? 0)));
         setCompletedMatches(res.completedMatches || []);
         setTournamentState(res.tournamentState || '');
-        setSwissRounds(res.swissRounds != null ? res.swissRounds : '');
         setTournamentType(res.tournamentType || '');
       } else {
         toast.error(res?.message || 'Gagal fetch data');
@@ -178,19 +245,49 @@ export default function RefereeArena() {
     }
   };
 
-  const handleExportStandings = async () => {
-    const sheetName = window.prompt("Masukkan nama Sheet tujuan (contoh: Juli Week 3):", "Juli Week 3");
-    if (!sheetName || !sheetName.trim()) return;
+  const handleSyncMatches = async () => {
+    if (!tournamentUrl) {
+      toast.error('URL Challonge tidak ditemukan pada event aktif.');
+      return;
+    }
 
+    setIsSyncing(true);
+    try {
+      const response = await postToGas('manualSync', {
+        tournamentUrl: tournamentUrl
+      });
+
+      if (response?.status === 'success') {
+        await handleFetchMatches(tournamentUrl);
+        toast.success('Berhasil menyinkronkan data dengan Challonge!');
+      } else {
+        toast.error(response?.message || 'Gagal sync');
+      }
+    } catch (err) {
+      toast.error('Gagal terhubung ke server saat sinkronisasi.');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleOpenExport = () => {
+    const defaultName = activeEventName || 'Rekap Turnamen';
+    setExportSheetName(defaultName);
+    setShowExportModal(true);
+  };
+
+  const executeExport = async () => {
+    if (!exportSheetName.trim()) return;
     setIsExporting(true);
     try {
       const result = await postToGas('exportStandings', {
-        sheetName: sheetName.trim(),
-        payload: leagueStandings,
+        sheetName: exportSheetName.trim(),
+        payload: liveStandings,
         optionalPoints: optionalPoints,
       });
       if (result?.status === 'success') {
         toast.success(result.message || 'Berhasil rekap ke spreadsheet!');
+        setShowExportModal(false);
       } else {
         toast.error(result?.message || 'Gagal export standings');
       }
@@ -224,21 +321,6 @@ export default function RefereeArena() {
     }
   };
 
-  const handleUpdateSwissRounds = async () => {
-    const slug = tournamentUrl;
-    if (!slug) return toast.error('URL turnamen kosong');
-    try {
-      const res = await updateSwissRounds({ tournament_url: slug, swiss_rounds: swissRounds });
-      if (res?.status === 'success') {
-        toast.success('Swiss Rounds berhasil disimpan: ' + swissRounds);
-      } else {
-        toast.error(res?.message || 'Gagal update Swiss Rounds');
-      }
-    } catch {
-      toast.error('Gagal terhubung ke server');
-    }
-  };
-
   const handleSelectMatch = (match) => {
     setSelectedMatch(match);
     setScores({ p1: 0, p2: 0 });
@@ -268,6 +350,16 @@ export default function RefereeArena() {
 
   const triggerScoreAnimation = (player, finishType, points, colorHex, audioSrc) => {
     new Audio(audioSrc).play().catch(e => console.log(e));
+
+    const bgm = bgmRef.current;
+    if (bgm) {
+      bgm.volume = BGM_DUCK_VOLUME;
+      if (duckingTimeoutRef.current) clearTimeout(duckingTimeoutRef.current);
+      duckingTimeoutRef.current = setTimeout(() => {
+        if (bgmRef.current) bgmRef.current.volume = BGM_BASE_VOLUME;
+      }, DUCK_DURATION);
+    }
+
     setScoreEvent({ type: finishType, player, colorHex });
     setTimeout(() => {
       handleAddScore(player === 1 ? 'p1' : 'p2', points);
@@ -430,46 +522,55 @@ export default function RefereeArena() {
   const leftFailSide = swapped ? 'p2' : 'p1';
   const rightFailSide = swapped ? 'p1' : 'p2';
 
-  const computeStandings = (participantList, completedMatchList) => {
-    const validMatches = (completedMatchList || []).filter(m => m && m.state === 'complete');
-    const statsById = {};
-    participantList.forEach(p => {
-      statsById[p.id] = { id: p.id, name: p.name || p.display_name || 'Unknown', wins: 0, losses: 0, ties: 0, pointFinish: 0 };
-    });
-
-    validMatches.forEach(m => {
-      const p1 = statsById[m.player1_id];
-      const p2 = statsById[m.player2_id];
-      const csv = (m.scores_csv || '').trim();
-      if (!csv) return;
-
-      const sets = csv.split(',').map(s => s.trim()).filter(Boolean);
-      let p1Games = 0;
-      let p2Games = 0;
-      sets.forEach(set => {
-        const parts = set.split('-').map(Number);
-        if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
-          p1Games += parts[0];
-          p2Games += parts[1];
-        }
-      });
-
-      if (p1) p1.pointFinish += p1Games;
-      if (p2) p2.pointFinish += p2Games;
-
-      if (p1Games > p2Games) {
-        if (p1) p1.wins += 1;
-        if (p2) p2.losses += 1;
-      } else if (p2Games > p1Games) {
-        if (p2) p2.wins += 1;
-        if (p1) p1.losses += 1;
-      } else {
-        if (p1) p1.ties += 1;
-        if (p2) p2.ties += 1;
+  const getLiveStandings = (participantList, completedMatchList) => {
+    const standingsMap = {};
+    (participantList || []).forEach(p => {
+      const data = p.participant ? p.participant : p;
+      if (data && data.id != null) {
+        const idKey = String(data.id);
+        standingsMap[idKey] = {
+          id: idKey,
+          name: data.name || data.display_name || 'Unknown',
+          wins: 0,
+          losses: 0,
+          ties: 0,
+          pts: 0,
+          pointFinish: 0,
+          final_rank: Number(data.final_rank) || 0
+        };
       }
     });
 
-    const standings = Object.values(statsById);
+    (completedMatchList || []).forEach(m => {
+      const match = m.match ? m.match : m;
+      const state = match.state || m.state;
+      if (state === 'complete' || state === 'completed') {
+        const wId = match.winner_id != null ? String(match.winner_id) : null;
+        const p1Id = match.player1_id != null ? String(match.player1_id) : null;
+        const p2Id = match.player2_id != null ? String(match.player2_id) : null;
+        let lId = match.loser_id != null ? String(match.loser_id) : null;
+        if (wId && !lId) {
+          if (wId === p1Id) lId = p2Id;
+          else if (wId === p2Id) lId = p1Id;
+        }
+
+        if (wId && standingsMap[wId]) standingsMap[wId].wins += 1;
+        if (lId && standingsMap[lId]) standingsMap[lId].losses += 1;
+
+        const p1Score = Number(match.player1_score) || 0;
+        const p2Score = Number(match.player2_score) || 0;
+        if (p1Id && standingsMap[p1Id]) {
+          standingsMap[p1Id].pointFinish += p1Score;
+          standingsMap[p1Id].pts += p1Score;
+        }
+        if (p2Id && standingsMap[p2Id]) {
+          standingsMap[p2Id].pointFinish += p2Score;
+          standingsMap[p2Id].pts += p2Score;
+        }
+      }
+    });
+
+    const standings = Object.values(standingsMap);
     standings.forEach(s => {
       s.isTied = standings.some(other => other.id !== s.id && other.wins === s.wins && other.pointFinish === s.pointFinish);
     });
@@ -485,7 +586,7 @@ export default function RefereeArena() {
     return standings;
   };
 
-  const leagueStandings = computeStandings(participants, completedMatches);
+  const liveStandings = getLiveStandings(participants, completedMatches);
 
   return (
       <div className="min-h-screen bg-transparent text-blue-400 font-mono">
@@ -513,38 +614,23 @@ export default function RefereeArena() {
                 <p className="text-[10px] font-black text-blue-400/60 uppercase tracking-widest">Arena Scoreboard</p>
                 <p className="text-[10px] md:text-xs font-bold text-slate-500 tracking-[0.2em] uppercase">Active Event</p>
                 <p className="text-xl lg:text-2xl font-black text-green-400 drop-shadow-[0_0_10px_rgba(74,222,128,0.4)] tracking-wide uppercase text-center px-4">{activeEventName}</p>
+                {activeEventWaktu && (
+                  <p className="text-xs font-bold text-blue-300/80 tracking-wider uppercase">
+                    {activeEventWaktu}
+                  </p>
+                )}
                 <button
                   type="button"
-                  onClick={() => handleFetchMatches(tournamentUrl)}
-                  disabled={loading}
+                  onClick={handleSyncMatches}
+                  disabled={isSyncing || loading}
                   title="Refresh data"
                   className="flex items-center justify-center gap-2 px-5 py-2 mt-2 rounded-full bg-slate-800/80 border border-slate-600 hover:bg-blue-600 hover:border-blue-400 transition-colors text-xs font-bold text-slate-300 hover:text-white uppercase tracking-widest disabled:opacity-50"
                 >
-                  🔄 SYNC MATCHES
+                  {isSyncing ? <RefreshCw className="animate-spin" size={16} /> : '🔄 SYNC MATCHES'}
                 </button>
               </div>
             )}
           </div>
-
-          {!loading && Array.isArray(matches) && matches.length > 0 && tournamentType === 'swiss' && (
-            <div className="w-full p-6 md:p-8 rounded-[2rem] bg-slate-800/30 border border-white/5 shadow-sm flex flex-col items-center justify-center gap-3">
-              <label className="text-xs lg:text-sm font-bold text-slate-400 tracking-widest uppercase text-center">Swiss Rounds</label>
-              <div className="flex items-center gap-2">
-                <div className="flex items-center gap-2">
-                  <button onClick={() => setSwissRounds(prev => Math.max(1, Number(prev) - 1))} className="w-10 h-10 md:w-12 md:h-12 bg-slate-800 border border-slate-600 rounded-lg text-white font-bold hover:bg-slate-700 flex items-center justify-center transition-colors">-</button>
-                  <input type="number" readOnly value={swissRounds} className="w-12 h-10 md:h-12 bg-slate-900 border border-slate-700 rounded-lg text-center text-white font-bold focus:outline-none pointer-events-none" />
-                  <button onClick={() => setSwissRounds(prev => Number(prev) + 1)} className="w-10 h-10 md:w-12 md:h-12 bg-slate-800 border border-slate-600 rounded-lg text-white font-bold hover:bg-slate-700 flex items-center justify-center transition-colors">+</button>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleUpdateSwissRounds}
-                  className="px-4 md:px-6 h-10 md:h-12 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs lg:text-sm tracking-widest uppercase transition-colors shadow-lg shadow-blue-500/20 border border-blue-500"
-                >
-                  SIMPAN
-                </button>
-              </div>
-            </div>
-          )}
 
           {loading && (
             <div className="text-center py-8">
@@ -593,7 +679,7 @@ export default function RefereeArena() {
                     >
                       <div className="w-full flex flex-col items-center justify-center border-b border-white/5 pb-3 mb-3">
                         <span className="text-xs lg:text-sm font-black text-blue-400 tracking-widest uppercase mb-1">
-                          ROUND {m.round} • MATCH {idx + 1}
+                          {m.round < 0 ? `LOWER BRACKET ${-m.round}` : `ROUND ${m.round}`} • MATCH {m.suggested_play_order ?? idx + 1}
                         </span>
                       </div>
                       <div className="flex flex-col items-center justify-center w-full text-center mt-2">
@@ -618,7 +704,7 @@ export default function RefereeArena() {
                 </div>
               )}
 
-              {(tournamentState === 'complete' || tournamentState === 'awaiting_review') && !loading && leagueStandings.length > 0 && (
+              {(tournamentState === 'underway' || tournamentState === 'complete' || tournamentState === 'awaiting_review') && !loading && liveStandings.length > 0 && (
                 <>
                   <div className="mt-8 w-full max-w-2xl mx-auto">
                     <h3 className="text-xl text-yellow-400 font-bold mb-4 tracking-widest">KLASEMEN LIGA</h3>
@@ -628,23 +714,27 @@ export default function RefereeArena() {
                         <tr className="border-b-2 border-blue-900">
                           <th className="py-4 px-4 text-[10px] font-black text-blue-400 uppercase tracking-wider text-center">Posisi</th>
                           <th className="py-4 px-4 text-[10px] font-black text-blue-400 uppercase tracking-wider text-center">Pemain</th>
-                          <th className="py-4 px-4 text-[10px] font-black text-blue-400 uppercase tracking-wider text-center">W-L-T</th>
+                          <th className="py-4 px-4 text-[10px] font-black text-blue-400 uppercase tracking-wider text-center whitespace-nowrap">W - L</th>
                           <th className="py-4 px-4 text-[10px] font-black text-blue-400 uppercase tracking-wider text-center">Point Finish</th>
                           <th className="py-4 px-4 text-[10px] font-black text-blue-400 uppercase tracking-wider text-center">Opsional Point</th>
                           <th className="py-4 px-4 text-[10px] font-black text-blue-400 uppercase tracking-wider text-center">Poin Liga</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {leagueStandings.map((p, i) => (
+                        {liveStandings.map((p, i) => (
                           <tr key={p.id} className="border-b border-blue-900 hover:bg-slate-800/50 transition-colors">
                             <td className="py-3 px-4 text-center">
                               <span className={`inline-flex items-center justify-center w-8 h-8 rounded-full text-xs font-black ${i === 0 ? 'bg-yellow-400 text-black' : i === 1 ? 'bg-gray-300 text-black' : i === 2 ? 'bg-orange-400 text-black' : 'bg-blue-400/20 text-blue-400'}`}>
                                 {i + 1}
                               </span>
                             </td>
-                            <td className="py-3 px-4 text-center font-black text-blue-300 tracking-tighter">{p.name}</td>
-                            <td className="py-3 px-4 text-center font-mono text-xs">
-                              {`${p.wins} - ${p.losses} - ${p.ties}`}
+                            <td className="py-3 px-4 text-left">
+                              <div className="flex-1 min-w-[110px] text-left px-2">
+                                <span className="font-black text-blue-300 tracking-tighter text-sm md:text-base whitespace-nowrap block truncate">{p.name}</span>
+                              </div>
+                            </td>
+                            <td className="py-3 px-4 text-center font-mono text-xs font-bold whitespace-nowrap">
+                              {`${p.wins} - ${p.losses}`}
                             </td>
                             <td className="py-3 px-4 text-center font-mono text-xs">
                               {p.pointFinish}
@@ -675,7 +765,7 @@ export default function RefereeArena() {
                 <div className="flex justify-center mt-6 mb-8">
                   <button
                     type="button"
-                    onClick={handleExportStandings}
+                    onClick={handleOpenExport}
                     disabled={isExporting}
                     className="w-full max-w-md py-4 px-6 rounded-xl font-black text-lg tracking-widest border-2 border-green-400 text-green-400 bg-green-400/10 hover:bg-green-400/20 active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   >
@@ -688,6 +778,47 @@ export default function RefereeArena() {
             </div>
           )}
         </motion.div>
+      )}
+
+      {showExportModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/60 backdrop-blur-sm">
+          <div className="w-full max-w-sm bg-[#1e293b] rounded-[2rem] p-6 shadow-2xl border border-slate-700">
+            <h3 className="text-lg font-black text-white italic uppercase tracking-tighter mb-2">
+              REKAP KE SPREADSHEET
+            </h3>
+            <p className="text-xs text-gray-400 mb-4">
+              Nama Sheet tujuan akan disesuaikan otomatis dengan nama event aktif.
+            </p>
+
+            <label className="text-[10px] font-black text-blue-500 uppercase ml-2 mb-1 block italic tracking-widest">
+              Nama Target Sheet
+            </label>
+            <input
+              type="text"
+              value={exportSheetName}
+              onChange={(e) => setExportSheetName(e.target.value)}
+              className="w-full bg-slate-800 text-gray-200 rounded-full px-4 py-3 font-bold outline-none border border-slate-600 focus:border-blue-400 transition-all mb-6"
+            />
+
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setShowExportModal(false)}
+                className="flex-1 py-3 bg-gray-700 text-gray-300 rounded-xl font-black uppercase italic text-xs active:scale-95 transition-all"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={executeExport}
+                disabled={isExporting || !exportSheetName.trim()}
+                className="flex-1 py-3 bg-emerald-600 text-white rounded-xl font-black uppercase italic text-xs shadow-lg shadow-emerald-900/50 active:scale-95 transition-all flex justify-center items-center disabled:opacity-50"
+              >
+                {isExporting ? 'Mengirim...' : 'Rekap Sekarang'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* STATE 2: SCOREBOARD HUD */}
@@ -926,18 +1057,18 @@ export default function RefereeArena() {
                 
                 {/* HEADER PEMENANG */}
                 <div className="flex flex-col items-center justify-center mb-4 lg:mb-10 w-full">
-                  <h2 className="text-[10px] lg:text-sm font-bold text-green-500 tracking-[0.3em] lg:tracking-[0.5em] uppercase mb-2 animate-pulse text-center">
+                  <h2 className="text-[30px] lg:text-sm font-bold text-green-500 tracking-[0.3em] lg:tracking-[0.5em] uppercase mb-2 animate-pulse text-center">
                     Match Winner
                   </h2>
                   <div className="flex flex-row items-center justify-center gap-3 lg:gap-6 text-3xl lg:text-7xl font-black text-yellow-400 drop-shadow-[0_0_15px_rgba(250,204,21,0.6)] italic tracking-tight w-full px-4">
                     <motion.div
-                      className="text-yellow-400 drop-shadow-[0_0_20px_rgba(250,204,21,0.6)] flex items-center flex-shrink-0"
+                      className="text-yellow-400 drop-shadow-[0_0_50px_rgba(250,204,21,0.6)] flex items-center flex-shrink-0"
                       animate={{ y: [0, -6, 0] }}
                       transition={{ repeat: Infinity, duration: 2 }}
                     >
                       <Trophy className="w-8 h-8 lg:w-16 lg:h-16"/>
                     </motion.div>
-                    <p className="truncate max-w-full text-center">{winnerName}</p>
+                    <p className="truncate max-w-full text-center text-5xl lg:text-8xl">{winnerName}</p>
                   </div>
                 </div>
 
@@ -1063,7 +1194,7 @@ export default function RefereeArena() {
                       >
                         <div className="flex items-center justify-between">
                           <div className="flex-1 min-w-0">
-                            <p className="text-xs lg:text-sm font-black text-blue-400 tracking-widest uppercase mb-1">ROUND {match.round} • MATCH {match.identifier || match.suggested_play_order || index + 1}</p>
+                            <p className="text-xs lg:text-sm font-black text-blue-400 tracking-widest uppercase mb-1">{match.round < 0 ? `LOWER BRACKET ${-match.round}` : `ROUND ${match.round}`} • MATCH {match.identifier || match.suggested_play_order || index + 1}</p>
                             <p className="text-xl lg:text-2xl font-black text-white group-hover:text-blue-300 transition-colors tracking-tight truncate">{match.player1_name}</p>
                             <p className="text-sm font-bold italic text-red-500/80 my-1">VS</p>
                             <p className="text-xl lg:text-2xl font-black text-white group-hover:text-blue-300 transition-colors tracking-tight truncate">{match.player2_name}</p>

@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const GAS_URL = "https://script.google.com/macros/s/AKfycbyzEQroC3szFDkuZXpLKykv4JGKIen4JmeqyLtnbnx0hrOdlF1P-Ay-M9okIfssVkflqA/exec";
+const GAS_URL = "https://script.google.com/macros/s/AKfycbzFfd7QYbLBpUFEtdfIFCgL8c5twSGyERPaGAs6li52Vy4Ed7L_l0rU5McJ8pARnhom/exec";
 
 const cache = new Map();
 const CACHE_TTL = 120000;
@@ -57,6 +57,11 @@ export const getOpenMatches = (tournamentUrl) => {
 };
 export const submitMatchScore = (payload) => postToGas('submitMatchScore', payload);
 export const startTournament = (payload) => postToGas('startTournament', payload);
-export const createTournament = (eventId, format) => postToGas('createTournament', { eventId, format });
+export const createTournament = (eventId, format, swissRounds) => postToGas('createTournament', {
+  eventId,
+  format,
+  ...(swissRounds != null ? { swiss_rounds: swissRounds } : {})
+});
 export const updateSwissRounds = (payload) => postToGas('updateSwissRounds', payload);
 export const getActiveEvent = () => getFromGas('getActiveEvent');
+export const manualSync = (payload) => postToGas('manualSync', payload);

@@ -56,6 +56,7 @@ function doPost(e) {
       case 'updateSwissRounds': return updateSwissRounds(data);
       case 'createTournament': return createTournament(data);
       case 'exportStandings': return exportStandings(data);
+      case 'manualSync': return handleManualSync(data);
       default: return res({ error: "Endpoint POST tidak ditemukan" });
     }
   } catch (err) {
@@ -95,13 +96,16 @@ function fetchActiveEvent() {
 
   // Ambil challongeUrl jika ada (kolom G = index 6)
   const challongeUrl = activeEvent[6] ? String(activeEvent[6]).trim() : '';
+  // Ambil waktu event dari kolom J = index 9
+  const waktu = activeEvent[9] ? String(activeEvent[9]).trim() : '20.00 WIB';
 
   return {
     event: {
       id: activeEvent[0],
       nama: activeEvent[1],
       lokasi: activeEvent[3],
-      challongeUrl: challongeUrl
+      challongeUrl: challongeUrl,
+      waktu: waktu
     },
     participants: participants,
     count: participants.length
@@ -305,9 +309,9 @@ function createEvent(data) {
   }
 
   // 2. Tambah event baru dengan status "aktif"
-  // Struktur 9 kolom: id | nama | tanggal | lokasi | status | challonge_id | challonge_url | challonge_state | created_at
+  // Struktur 10 kolom: id | nama | tanggal | lokasi | status | challonge_id | challonge_url | challonge_state | created_at | waktu
   const newId = "E" + (rows.length);
-  sheet.appendRow([newId, data.nama, new Date(), data.lokasi, "aktif", "", "", "", ""]);
+  sheet.appendRow([newId, data.nama, new Date(), data.lokasi, "aktif", "", "", "", "", data.waktu || "20.00 WIB"]);
 
   return res({ status: "success", message: "Event berhasil dibuat!" });
 }
@@ -515,29 +519,40 @@ function challongeFetch(method, urlPath, bodyObj, version) {
   const baseUrl = useV2 ? 'https://api.challonge.com/v2.1' : 'https://api.challonge.com/v1';
   const fullUrl = urlPath.startsWith('http') ? urlPath : baseUrl + urlPath;
 
-  const headers = useV2
+  // Header wajib untuk Challonge API v2.1 (Authorization-Type: v1 agar API key v1 tetap berlaku).
+  const options = useV2
     ? {
-        'Authorization-Type': 'v1',
-        'Authorization': apiKey,
-        'Accept': 'application/json',
-        'Content-Type': 'application/vnd.api+json'
+        "method": method,
+        "headers": {
+          "Authorization": apiKey,
+          "Authorization-Type": "v1",
+          "Content-Type": "application/vnd.api+json",
+          "Accept": "application/json"
+        },
+        "muteHttpExceptions": true
       }
     : {
-        'Authorization': 'Basic ' + Utilities.base64Encode(username + ':' + apiKey)
+        "method": method,
+        "headers": {
+          "Authorization": 'Basic ' + Utilities.base64Encode(username + ':' + apiKey)
+        },
+        "muteHttpExceptions": true
       };
-
-  const options = {
-    method: method,
-    headers: headers,
-    muteHttpExceptions: true
-  };
-
-  if (useV2) {
-    options.contentType = 'application/vnd.api+json';
-  }
 
   if (bodyObj !== undefined && bodyObj !== null) {
     options.payload = JSON.stringify(bodyObj);
+  }
+
+  const isGetRequest = method.toLowerCase() === 'get';
+  const cache = CacheService.getScriptCache();
+  const cacheKey = isGetRequest ? 'challonge_' + Utilities.base64Encode(fullUrl) : null;
+
+  if (isGetRequest) {
+    const cachedData = cache.get(cacheKey);
+    if (cachedData) {
+      Logger.log('[CACHE HIT] Returning cached data for: ' + fullUrl);
+      return JSON.parse(cachedData);
+    }
   }
 
   Logger.log('==========================');
@@ -573,11 +588,56 @@ function challongeFetch(method, urlPath, bodyObj, version) {
       return { __error: true, code: code, text: errorDetail, url: fullUrl };
     }
 
+    if (isGetRequest) {
+      cache.put(cacheKey, text, 180);
+      Logger.log('[CACHE SAVED] Saved response for: ' + fullUrl);
+    }
+
     return JSON.parse(text);
   } catch (e) {
     console.error('Challonge fetch failed: ' + e.message);
     throw new Error('Gagal terhubung ke Challonge (' + fullUrl + '): ' + e.message);
   }
+}
+
+// ============================================
+// MANUAL SYNC: Hapus cache turnamen secara manual
+// ============================================
+function handleManualSync(data) {
+  try {
+    const tournamentUrl = String(data.tournamentUrl || '');
+    if (!tournamentUrl) {
+      return res({ status: 'error', message: 'tournamentUrl wajib diisi' });
+    }
+
+    const matchIdMatch = tournamentUrl.match(/tournaments\/([^\/]+)/);
+    if (matchIdMatch && matchIdMatch[1]) {
+      clearTournamentCache(matchIdMatch[1]);
+    }
+
+    return res({ status: 'success', message: 'Cache berhasil dibersihkan, data disinkronkan!' });
+  } catch (err) {
+    return res({ status: 'error', message: 'Gagal sync: ' + err.message });
+  }
+}
+
+// ============================================
+// CACHE INVALIDATION: Hapus cache tournament setelah mutasi
+// ============================================
+function clearTournamentCache(tournamentId) {
+  if (!tournamentId) return;
+  const cache = CacheService.getScriptCache();
+  const baseUrl = 'https://api.challonge.com/v2.1/tournaments/' + tournamentId;
+  const urlsToClear = [
+    baseUrl + '.json',
+    baseUrl + '/participants.json',
+    baseUrl + '/matches.json'
+  ];
+  urlsToClear.forEach(url => {
+    const cacheKey = 'challonge_' + Utilities.base64Encode(url);
+    cache.remove(cacheKey);
+    Logger.log('[CACHE CLEARED] Dihapus paksa karena ada update: ' + url);
+  });
 }
 
 // ============================================
@@ -774,9 +834,13 @@ function createTournament(data) {
       attributes.double_elimination_options = { grand_finals_modifier: 'single match' };
     } else {
       // Swiss: rounds + poin (hanya valid untuk swiss)
+      // Gunakan nilai dari form Admin (data.swiss_rounds). Default 3 jika kosong/salah.
+      const swissRounds = Number(data.swiss_rounds);
+      const rounds = (!isNaN(swissRounds) && swissRounds >= 1) ? swissRounds : 3;
+      Logger.log("Debug: Jumlah ronde yang dikirim ke Challonge adalah: " + rounds);
       // pts_for_bye wajib diisi (API v2.1 mewajibkan field ini, lihat error 422).
       attributes.swiss_options = {
-        rounds: 3,
+        rounds: rounds,
         pts_for_match_win: 1,
         pts_for_match_tie: 0.5,
         pts_for_game_win: 1,
@@ -897,10 +961,13 @@ function getOpenMatches(tournamentUrl) {
       return res({ status: 'error', message: 'Tournament ID tidak ditemukan di sheet untuk slug="' + slug + '". Pastikan event sudah dibuat via createTournament.' });
     }
 
-    const participantsUrl = '/tournaments/' + tournamentId + '/participants.json';
-    const matchesUrl = '/tournaments/' + tournamentId + '/matches.json?state=open';
-    const completedMatchesUrl = '/tournaments/' + tournamentId + '/matches.json?state=complete&include_scores=1';
-    const tournamentUrlFull = '/tournaments/' + tournamentId + '.json';
+    // Endpoint wajib Challonge API v2.1 (base https://api.challonge.com/v2.1)
+    // PENTING: HANYA 1x fetch untuk matches (bulk index, tanpa filter state, tanpa match_id di ujung URL)
+    // agar tidak menghabiskan kuota API Challonge (500 req/bulan). Pemrosesan state
+    // (open / complete) dilakukan di memory GAS, BUKAN dengan memanggil API lagi.
+    const participantsUrl = 'https://api.challonge.com/v2.1/tournaments/' + tournamentId + '/participants.json';
+    const matchesUrl = 'https://api.challonge.com/v2.1/tournaments/' + tournamentId + '/matches.json';
+    const tournamentUrlFull = 'https://api.challonge.com/v2.1/tournaments/' + tournamentId + '.json';
 
     const participantsRes = challongeFetch('get', participantsUrl, undefined, 'v2.1');
     if (participantsRes.__error) {
@@ -909,24 +976,61 @@ function getOpenMatches(tournamentUrl) {
     }
 
     Logger.log('[getOpenMatches] RAW PARTICIPANTS RESPONSE=' + JSON.stringify(participantsRes));
+
+    // LANGKAH 1: X-RAY struktur participant mentah dari Challonge
+    if (participantsRes.data && participantsRes.data.length > 0) {
+      Logger.log(JSON.stringify(participantsRes.data[0], null, 2));
+    }
+
     const participantsRaw = Array.isArray(participantsRes.data) ? participantsRes.data : (Array.isArray(participantsRes) ? participantsRes : []);
     const participantList = participantsRaw.map(p => {
       const participant = p.participant || p;
       const attr = participant.attributes || participant;
+      // LANGKAH 2: baca field dari response runtime, jangan asumsi.
+      // Cek beberapa kemungkinan lokasi sebelum fallback 0.
+      const num = (...cands) => {
+        for (const c of cands) {
+          if (c != null && !isNaN(Number(c))) return Number(c);
+        }
+        return 0;
+      };
       return {
         id: String(participant.id || ''),
-        name: attr.name || ('Player ' + participant.id)
+        name: attr.name || ('Player ' + participant.id),
+        points: num(attr.points, attr.stats && attr.stats.points, attr.ranking && attr.ranking.points),
+        match_wins: num(attr.match_wins, attr.stats && attr.stats.match_wins),
+        match_losses: num(attr.match_losses, attr.stats && attr.stats.match_losses),
+        buchholz: num(attr.buchholz, attr.stats && attr.stats.buchholz),
+        points_diff: num(attr.points_diff, attr.stats && attr.stats.points_diff),
+        final_rank: num(attr.final_rank, attr.rank, attr.final_rank)
       };
     });
+
+    // LANGKAH 3 & 4: participantMap lengkap (bukan hanya name)
     const participantMap = {};
     participantList.forEach(participant => {
       if (participant && participant.id) {
-        participantMap[participant.id] = participant.name;
+        participantMap[participant.id] = {
+          id: participant.id,
+          name: participant.name,
+          points: participant.points,
+          match_wins: participant.match_wins,
+          match_losses: participant.match_losses,
+          buchholz: participant.buchholz,
+          points_diff: participant.points_diff,
+          final_rank: participant.final_rank
+        };
       }
     });
-    Logger.log('[getOpenMatches] participantList=' + JSON.stringify(participantList));
-    Logger.log('[getOpenMatches] participantMap=' + JSON.stringify(participantMap));
 
+    // LANGKAH 5: log isi akhir participantMap
+    Logger.log(JSON.stringify(participantMap, null, 2));
+
+    Logger.log('[getOpenMatches] participantList=' + JSON.stringify(participantList));
+    Logger.log('[getOpenMatches] participantMap(short)=' + JSON.stringify(Object.keys(participantMap)));
+
+    // 1x FETCH BULK: ambil SEMUA match sekaligus (open + complete + pending) dalam 1 panggilan API.
+    // Pemrosesan state dilakukan di memory di bawah ini (tidak ada lagi pemanggilan API per state).
     const matchesRes = challongeFetch('get', matchesUrl, undefined, 'v2.1');
     if (matchesRes.__error) {
       console.error('Gagal fetch matches: ' + matchesRes.text);
@@ -942,68 +1046,46 @@ function getOpenMatches(tournamentUrl) {
       Logger.log('[getOpenMatches] matchesRaw[0].attributes=' + JSON.stringify(matchesRaw[0].attributes, null, 2));
     }
     Logger.log('[getOpenMatches] ALL MATCHES BEFORE FILTER=' + JSON.stringify(matchesRaw.map(m => ({ id: m.id, state: m.attributes && m.attributes.state, player1_id: m.relationships && m.relationships.player1 && m.relationships.player1.data && m.relationships.player1.data.id, player2_id: m.relationships && m.relationships.player2 && m.relationships.player2.data && m.relationships.player2.data.id })), null, 2));
-    const openMatches = matchesRaw
-      .map(m => {
-        const state = m.attributes && m.attributes.state ? m.attributes.state : (m.state || '');
-        if (String(state || '').toLowerCase() !== 'open') return null;
-        let raw_p1 = null;
-        let raw_p2 = null;
-        if (m.attributes && m.attributes.points_by_participant) {
-          const participants = m.attributes.points_by_participant;
-          if (participants.length > 0) raw_p1 = participants[0].participant_id;
-          if (participants.length > 1) raw_p2 = participants[1].participant_id;
-        }
-        const p1_id = raw_p1 ? String(raw_p1) : null;
-        const p2_id = raw_p2 ? String(raw_p2) : null;
-        return {
-          match_id: m.id || (m.match && m.match.id) || '',
-          player1_id: p1_id,
-          player2_id: p2_id,
-          player1_name: participantMap[p1_id] || ('Player ' + p1_id),
-          player2_name: participantMap[p2_id] || ('Player ' + p2_id),
-          round: m.attributes && m.attributes.round ? m.attributes.round : (m.round || (m.match && m.match.round) || ''),
-          suggested_play_order: m.attributes && m.attributes.suggested_play_order ? m.attributes.suggested_play_order : (m.suggested_play_order || (m.match && m.match.suggested_play_order) || ''),
-          state: state
-        };
-      })
-      .filter(m => m !== null);
-    Logger.log('[getOpenMatches] openMatches=' + JSON.stringify(openMatches));
 
-    const completedMatchesRes = challongeFetch('get', completedMatchesUrl, undefined, 'v2.1');
-    let completedMatches = [];
-    if (!completedMatchesRes.__error) {
-      Logger.log('[getOpenMatches] RAW COMPLETED MATCHES RESPONSE=' + JSON.stringify(completedMatchesRes));
-      const completedRaw = Array.isArray(completedMatchesRes.data) ? completedMatchesRes.data : (Array.isArray(completedMatchesRes) ? completedMatchesRes : []);
-      Logger.log('[getOpenMatches] completedRaw count=' + completedRaw.length);
-      if (completedRaw.length > 0) {
-        Logger.log('[getOpenMatches] completedRaw[0]=' + JSON.stringify(completedRaw[0], null, 2));
-        Logger.log('[getOpenMatches] completedRaw[0].relationships=' + JSON.stringify(completedRaw[0].relationships, null, 2));
-        Logger.log('[getOpenMatches] completedRaw[0].attributes=' + JSON.stringify(completedRaw[0].attributes, null, 2));
+    // Proses SELURUH match di memory (1 fetch sudah cukup).
+    // ID pemain diambil LANGSUNG dari points_by_participant (relationships sering null di v2.1).
+    const allMatches = matchesRaw.map((m, index) => {
+      var attrs = m.attributes;
+      var points = attrs.points_by_participant || [];
+
+      var p1Id = points.length > 0 ? String(points[0].participant_id) : null;
+      var p2Id = points.length > 1 ? String(points[1].participant_id) : null;
+
+      var p1Score = 0;
+      var p2Score = 0;
+      if (points.length > 0 && points[0].scores) {
+        p1Score = points[0].scores.reduce((a, b) => a + b, 0);
       }
-      Logger.log('[getOpenMatches] ALL COMPLETED MATCHES BEFORE FILTER=' + JSON.stringify(completedRaw.map(m => ({ id: m.id, state: m.attributes && m.attributes.state, player1_id: m.relationships && m.relationships.player1 && m.relationships.player1.data && m.relationships.player1.data.id, player2_id: m.relationships && m.relationships.player2 && m.relationships.player2.data && m.relationships.player2.data.id, scores_csv: m.attributes && m.attributes.scores_csv })), null, 2));
-      completedMatches = completedRaw
-        .map(m => {
-          const state = m.attributes && m.attributes.state ? m.attributes.state : (m.state || '');
-          if (String(state || '').toLowerCase() !== 'complete') return null;
-          let raw_p1 = null;
-          let raw_p2 = null;
-          if (m.attributes && m.attributes.points_by_participant) {
-            const participants = m.attributes.points_by_participant;
-            if (participants.length > 0) raw_p1 = participants[0].participant_id;
-            if (participants.length > 1) raw_p2 = participants[1].participant_id;
-          }
-          const p1_id = raw_p1 ? String(raw_p1) : null;
-          const p2_id = raw_p2 ? String(raw_p2) : null;
-          return {
-            match_id: m.id || (m.match && m.match.id) || '',
-            player1_id: p1_id,
-            player2_id: p2_id,
-            scores_csv: m.attributes && m.attributes.scores_csv ? m.attributes.scores_csv : (m.scores_csv || ''),
-            state: state
-          };
-        })
-        .filter(m => m !== null);
-    }
+      if (points.length > 1 && points[1].scores) {
+        p2Score = points[1].scores.reduce((a, b) => a + b, 0);
+      }
+
+      return {
+        match_id: String(m.id),
+        round: attrs.round || 1,
+        identifier: String(index + 1),
+        player1_id: p1Id,
+        player2_id: p2Id,
+        state: attrs.state,
+        winner_id: attrs.winner_id ? String(attrs.winner_id) : null,
+        player1_score: p1Score,
+        player2_score: p2Score,
+        scores_csv: attrs.scores || "0-0"
+      };
+    });
+
+    // Filter di memory: HANYA ambil match yang BELUM SELESAI (winner_id kosong).
+    // Jangan filter berdasarkan state ('open'/'pending' saja) karena Babak baru bisa
+    // muncul dengan state lain yang tetap belum ada pemenang.
+    const openMatches = allMatches.filter(m => !m.winner_id);
+    const completedMatches = allMatches.filter(m => String(m.state || '').toLowerCase() === 'complete');
+
+    Logger.log('[getOpenMatches] openMatches=' + JSON.stringify(openMatches));
     Logger.log('[getOpenMatches] completedMatches=' + JSON.stringify(completedMatches));
 
     const tournamentRes = challongeFetch('get', tournamentUrlFull, undefined, 'v2.1');
@@ -1098,6 +1180,8 @@ function submitMatchScore(data) {
     } catch (e) {
       jsonResponse = { match: {} };
     }
+
+    clearTournamentCache(tournamentId);
 
     if (jsonResponse.match && jsonResponse.match.state === 'complete') {
       return res({ status: 'success', match: jsonResponse.match });
@@ -1241,6 +1325,8 @@ function startTournament(data) {
       console.error('Gagal update challonge_state: ' + e.message);
     }
 
+    clearTournamentCache(identifier);
+
     return res({ status: 'success', tournament: response.data || response });
   } catch (err) {
     console.error('startTournament error: ' + err.message);
@@ -1304,9 +1390,17 @@ function exportStandings(data) {
       return res({ status: 'error', message: 'Nama sheet tidak boleh kosong' });
     }
 
-    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName);
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let sheet = ss.getSheetByName(sheetName);
+
     if (!sheet) {
-      return res({ status: 'error', message: 'Sheet tidak ditemukan!' });
+      const templateSheet = ss.getSheetByName("TEMPLATE");
+      if (templateSheet) {
+        sheet = templateSheet.copyTo(ss);
+        sheet.setName(sheetName);
+      } else {
+        sheet = ss.insertSheet(sheetName);
+      }
     }
 
     const LEAGUE_POINTS_DISTRIBUTION = [20, 17, 15, 13, 11, 9, 8, 7, 6, 5, 4, 3, 2, 1, 1, 1];
@@ -1359,7 +1453,8 @@ function getActiveEvent() {
       if (status === 'aktif') {
         activeEvent = {
           eventName: String(row[1] || ''),
-          rawUrl: String(row[6] || '') // kolom G = challonge_url
+          rawUrl: String(row[6] || ''), // kolom G = challonge_url
+          waktu: String(row[9] || '').trim() // kolom J = waktu
         };
         break;
       }
@@ -1381,7 +1476,7 @@ function getActiveEvent() {
       extractedId = slug;
     }
 
-    return res({ status: 'success', eventName: activeEvent.eventName, challongeUrl: extractedId });
+    return res({ status: 'success', eventName: activeEvent.eventName, challongeUrl: extractedId, waktu: activeEvent.waktu });
   } catch (err) {
     console.error('getActiveEvent error: ' + err.message);
     return res({ status: 'error', message: 'Gagal getActiveEvent: ' + err.message });

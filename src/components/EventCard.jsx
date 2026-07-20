@@ -22,7 +22,7 @@ const EventCard = ({ event, participants, count, user, onAttend, onCancel, isSub
           <span className="text-[10px] font-black uppercase tracking-[0.3em] bg-white/20 px-3 py-1 rounded-full dark:text-white">Arena Active</span>
           <h2 className="text-3xl font-black mt-4 mb-4 uppercase italic tracking-tighter leading-none dark:text-white">{event.nama}</h2>
           <div className="flex items-center justify-center sm:justify-start gap-2 text-xs font-bold opacity-80 mb-2 italic dark:text-white"><MapPin size={16} /> {event.lokasi}</div>
-          <div className="flex items-center justify-center sm:justify-start gap-2 text-xs font-bold opacity-80 mb-8 italic dark:text-white"><Clock8 size={16} /> 20.00 WIB</div>
+          <div className="flex items-center justify-center sm:justify-start gap-2 text-xs font-bold opacity-80 mb-8 italic dark:text-white"><Clock8 size={16} /> {event.waktu || '20.00 WIB'}</div>
           {challongeUrl && (
             <motion.a
               href={challongeUrl}

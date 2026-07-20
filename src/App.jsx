@@ -33,7 +33,6 @@ export default function App() {
   const [newNickname, setNewNickname] = useState('');
   const [activeTab, setActiveTab] = useState('arena');
   const [showEventModal, setShowEventModal] = useState(false);
-  const [eventForm, setEventForm] = useState({ nama: '', lokasi: '' });
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [modalProfile, setModalProfile] = useState(null);
   const [modalLoading, setModalLoading] = useState(false);
@@ -101,10 +100,10 @@ export default function App() {
     setIsSubmitting(false);
   };
 
-  const handleSubmitEvent = async () => {
-    if (!eventForm.nama || !eventForm.lokasi) return toast.error('Isi semua data!');
+  const handleSubmitEvent = async (formData) => {
+    if (!formData.nama || !formData.lokasi) return toast.error('Isi semua data!');
     setIsSubmitting(true);
-    const res = await postToGas('createEvent', eventForm);
+    const res = await postToGas('createEvent', formData);
     if (res?.status === 'success') {
       toast.success('Event Baru Aktif!');
       setShowEventModal(false);
@@ -128,13 +127,14 @@ export default function App() {
     setIsSubmitting(false);
   };
 
-  const handleGenerateTournament = async (format = 'weekly') => {
+  const handleGenerateTournament = async (opts = {}) => {
+    const { format = 'weekly', swissRounds } = opts;
     if (!data?.event?.id) return toast.error('Tidak ada event aktif!');
     setIsGenerating(true);
     try {
       // Mapping UI format -> Challonge type untuk GAS createTournament
       const challongeFormat = format === 'final' ? 'double elimination' : 'swiss';
-      const res = await createTournament(data.event.id, challongeFormat);
+      const res = await createTournament(data.event.id, challongeFormat, format === 'weekly' ? Number(swissRounds) || 3 : undefined);
       if (res?.status === 'success') {
         toast.success('Bracket turnamen berhasil dibuat!');
         refreshEvent();
@@ -324,8 +324,6 @@ export default function App() {
       <CreateEventModal
         show={showEventModal}
         onClose={() => setShowEventModal(false)}
-        form={eventForm}
-        setForm={setEventForm}
         onSubmit={handleSubmitEvent}
         isSubmitting={isSubmitting}
       />
