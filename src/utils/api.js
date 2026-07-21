@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const GAS_URL = "https://script.google.com/macros/s/AKfycbzFfd7QYbLBpUFEtdfIFCgL8c5twSGyERPaGAs6li52Vy4Ed7L_l0rU5McJ8pARnhom/exec";
+const GAS_URL = "https://script.google.com/macros/s/AKfycby1Nnv29JqvwTmu7h16Mpw02zI-28zNQUzRfpp0oCB1zdNsBd_MyZhbTaT1VINu80hS/exec";
 
 const cache = new Map();
 const CACHE_TTL = 120000;
