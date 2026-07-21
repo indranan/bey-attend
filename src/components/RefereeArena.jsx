@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Loader2, Trophy, Swords, RotateCcw, Maximize, Smartphone, RefreshCw } from 'lucide-react';
+import { Loader2, Trophy, Swords, RotateCcw, Maximize, Minimize, Smartphone, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getOpenMatches, submitMatchScore, startTournament, getActiveEvent, postToGas } from '../utils/api';
 import MatchIntro from './MatchIntro';
@@ -196,14 +196,13 @@ export default function RefereeArena() {
     return raw;
   };
 
-  const handleFetchMatches = async (urlOrBackground, maybeBackground) => {
+  const handleFetchMatches = async (urlOrBackground, maybeBackground, forceRefresh = false) => {
     const isBackground = typeof urlOrBackground === 'boolean' ? urlOrBackground : (maybeBackground || false);
     const rawUrl = typeof urlOrBackground === 'string' ? urlOrBackground : tournamentUrl;
     const slug = extractTournamentSlug(rawUrl);
     if (!slug) return toast.error('Masukkan Tournament URL/Slug!');
     setTournamentUrl(slug);
 
-    // Throttle: skip background/auto network calls within 5s (cache already covers 120s).
     const now = Date.now();
     if (now - lastFetchTs < 5000 && isBackground) {
       return;
@@ -214,7 +213,7 @@ export default function RefereeArena() {
       setLoading(true);
     }
     try {
-      const result = await getOpenMatches(slug);
+      const result = await getOpenMatches(slug, forceRefresh);
       const res = result.data;
       if (res?.status === 'success') {
         setParticipants(res.participants || []);
@@ -482,6 +481,8 @@ export default function RefereeArena() {
         setPreviewScores(null);
         resetMatch();
         setHudPhase('POST_MATCH');
+        setMatches(prev => prev.filter(m => m.match_id !== selectedMatch.match_id));
+        handleFetchMatches(tournamentUrl, false, true);
         await new Promise(resolve => setTimeout(resolve, 2500));
       } else {
         toast.error(res?.message || 'Gagal submit skor');
@@ -493,10 +494,40 @@ export default function RefereeArena() {
     }
   };
 
-  const forceFullscreen = () => {
-    const el = document.documentElement;
-    if (el.requestFullscreen) el.requestFullscreen().catch(() => { });
-    else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    const updateFullscreenState = () => {
+      setIsFullscreen(!!(document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement));
+    };
+    document.addEventListener('fullscreenchange', updateFullscreenState);
+    document.addEventListener('webkitfullscreenchange', updateFullscreenState);
+    document.addEventListener('msfullscreenchange', updateFullscreenState);
+    return () => {
+      document.removeEventListener('fullscreenchange', updateFullscreenState);
+      document.removeEventListener('webkitfullscreenchange', updateFullscreenState);
+      document.removeEventListener('msfullscreenchange', updateFullscreenState);
+    };
+  }, []);
+
+  const toggleFullscreen = async () => {
+    try {
+      if (!document.fullscreenElement) {
+        const elem = document.documentElement;
+        if (elem.requestFullscreen) await elem.requestFullscreen();
+        else if (elem.webkitRequestFullscreen) await elem.webkitRequestFullscreen();
+        else if (elem.msRequestFullscreen) await elem.msRequestFullscreen();
+        if (window.screen && window.screen.orientation && window.screen.orientation.lock) {
+          try { await window.screen.orientation.lock('landscape'); } catch (e) { console.warn('Screen orientation lock failed:', e); }
+        }
+      } else {
+        if (document.exitFullscreen) await document.exitFullscreen();
+        else if (document.webkitExitFullscreen) await document.webkitExitFullscreen();
+        else if (document.msExitFullscreen) await document.msExitFullscreen();
+      }
+    } catch (err) {
+      console.error(`Error attempting to enable fullscreen: ${err.message}`);
+    }
   };
 
   const winnerName = previewScores
@@ -824,7 +855,15 @@ export default function RefereeArena() {
       {/* STATE 2: SCOREBOARD HUD */}
       {state === 'hud' && selectedMatch && (
         <>
-          <div className="fixed inset-0 z-[999] bg-[#0a0a0a] overflow-hidden flex items-center justify-center">
+          <div className={`fixed inset-0 z-[999] bg-[#0a0a0a] overflow-hidden flex items-center justify-center ${isFullscreen ? 'w-screen h-screen' : ''}`}>
+            <button
+              type="button"
+              onClick={toggleFullscreen}
+              className="absolute top-4 right-4 z-50 p-3 rounded-full bg-slate-900/90 border border-slate-700 text-slate-400 hover:text-white hover:border-blue-500 transition-colors"
+              title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+            >
+              {isFullscreen ? <Minimize size={20} /> : <Maximize size={20} />}
+            </button>
           {isPortrait && (
             <div className="fixed inset-0 z-[1000] bg-black/95 flex flex-col items-center justify-center p-8 text-center">
               <Smartphone size={64} className="text-yellow-400 mb-4 animate-bounce" />
