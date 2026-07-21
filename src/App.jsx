@@ -4,7 +4,7 @@ import { GoogleLogin } from '@react-oauth/google';
 import { jwtDecode } from 'jwt-decode';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
-  LogOut, Loader2, MapPin, Trophy, UserCircle, ShieldCheck, Swords
+  LogOut, Loader2, MapPin, Trophy, UserCircle, ShieldCheck, Swords, Minimize
 } from 'lucide-react';
 import toast, { Toaster } from 'react-hot-toast';
 import { getFromGas, postToGas, updateBio, uploadProfilePhoto, updatePoints, createTournament } from './utils/api';
@@ -36,6 +36,31 @@ export default function App() {
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [modalProfile, setModalProfile] = useState(null);
   const [modalLoading, setModalLoading] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      setIsFullscreen(!!(document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement));
+    };
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+    document.addEventListener('msfullscreenchange', onFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', onFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', onFullscreenChange);
+      document.removeEventListener('msfullscreenchange', onFullscreenChange);
+    };
+  }, []);
+
+  const exitFullscreen = async () => {
+    try {
+      if (document.exitFullscreen) await document.exitFullscreen();
+      else if (document.webkitExitFullscreen) await document.webkitExitFullscreen();
+      else if (document.msExitFullscreen) await document.msExitFullscreen();
+    } catch (err) {
+      console.error("Gagal keluar dari fullscreen:", err);
+    }
+  };
 
   const refreshEvent = async () => {
     const res = await getFromGas('getEvent');
@@ -110,19 +135,6 @@ export default function App() {
       refreshEvent();
     } else {
       toast.error('Gagal terhubung ke server');
-    }
-    setIsSubmitting(false);
-  };
-
-  const handleResetArena = async () => {
-    if (!window.confirm('Apakah Anda yakin ingin mengosongkan arena (tutup event)?')) return;
-    setIsSubmitting(true);
-    const res = await postToGas('resetArena', {});
-    if (res?.status === 'success') {
-      toast.success('Arena telah dikosongkan!');
-      refreshEvent();
-    } else {
-      toast.error('Gagal reset arena');
     }
     setIsSubmitting(false);
   };
@@ -347,7 +359,19 @@ export default function App() {
             <p className="font-black text-sm text-gray-800 dark:text-white italic tracking-tighter truncate w-32">{blader?.nickname}</p>
           </div>
         </div>
-        <button type="button" onClick={logout} className="p-3 bg-red-100 text-red-600 rounded-2xl dark:bg-red-900/20 active:scale-90 transition-all"><LogOut size={20} /></button>
+        <div className="flex items-center gap-2">
+          {isFullscreen && (
+            <button
+              type="button"
+              onClick={exitFullscreen}
+              className="w-10 h-10 flex items-center justify-center rounded-full bg-slate-800 text-gray-300 hover:text-white hover:bg-slate-700 transition-all border border-slate-700"
+              title="Keluar Fullscreen"
+            >
+              <Minimize size={18} />
+            </button>
+          )}
+          <button type="button" onClick={logout} className="p-3 bg-red-100 text-red-600 rounded-2xl dark:bg-red-900/20 active:scale-90 transition-all"><LogOut size={20} /></button>
+        </div>
       </nav>
 
       <main className="max-w-md mx-auto p-4 dark:text-white">
@@ -375,7 +399,6 @@ export default function App() {
               <AdminContent
                 key="admin"
                 onCreateEvent={() => setShowEventModal(true)}
-                onResetArena={handleResetArena}
                 onGenerateTournament={handleGenerateTournament}
                 onUpdatePoints={handleUpdatePoints}
                 onToggleNickname={handleToggleNickname}

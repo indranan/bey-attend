@@ -3,7 +3,7 @@ import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
 import { ShieldCheck } from 'lucide-react';
 
-const AdminContent = ({ onCreateEvent, onResetArena, onGenerateTournament, onUpdatePoints, onToggleNickname, nicknameAllowed, leaderboard, isSubmitting, isGenerating, isUpdatingPoints, eventId }) => {
+const AdminContent = ({ onCreateEvent, onGenerateTournament, onUpdatePoints, onToggleNickname, nicknameAllowed, leaderboard, isSubmitting, isGenerating, isUpdatingPoints, eventId }) => {
   const [format, setFormat] = useState('weekly'); // 'weekly' | 'final'
   const [newSwissRounds, setNewSwissRounds] = useState(3);
   const [selectedId, setSelectedId] = useState('');
@@ -35,7 +35,6 @@ const AdminContent = ({ onCreateEvent, onResetArena, onGenerateTournament, onUpd
           <h3 className="text-xs font-black uppercase italic dark:text-gray-400">Event Management</h3>
         </div>
         <button type="button" onClick={onCreateEvent} disabled={isSubmitting} className="w-full py-4 bg-primary dark:text-white rounded-2xl font-black uppercase italic text-xs shadow-lg shadow-primary/30 active:scale-95 transition-all">Buat Event Baru</button>
-        <button type="button" onClick={onResetArena} disabled={isSubmitting} className="w-full py-4 bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-white rounded-2xl font-black uppercase italic text-xs active:scale-95 transition-all">Reset Status Kehadiran</button>
 
         <div className="border-t border-gray-100 dark:border-gray-800 pt-4">
           <p className="text-[10px] font-black uppercase italic text-gray-400 mb-2 text-center">Format Turnamen</p>

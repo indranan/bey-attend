@@ -41,8 +41,11 @@ export const uploadProfilePhoto = (payload) => postToGas('uploadProfilePhoto', p
 export const updatePoints = (payload) => postToGas('updatePoints', payload);
 
 // --- Challonge ---
-export const getOpenMatches = (tournamentUrl) => {
+export const getOpenMatches = (tournamentUrl, forceRefresh = false) => {
   const path = `getOpenMatches&tournament_url=${encodeURIComponent(tournamentUrl)}`;
+  if (forceRefresh) {
+    cache.delete(path);
+  }
   const cached = cache.get(path);
   if (cached && Date.now() - cached.time < CACHE_TTL) {
     return { data: cached.data, raw: null };

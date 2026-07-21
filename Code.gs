@@ -1079,10 +1079,9 @@ function getOpenMatches(tournamentUrl) {
       };
     });
 
-    // Filter di memory: HANYA ambil match yang BELUM SELESAI (winner_id kosong).
-    // Jangan filter berdasarkan state ('open'/'pending' saja) karena Babak baru bisa
-    // muncul dengan state lain yang tetap belum ada pemenang.
-    const openMatches = allMatches.filter(m => !m.winner_id);
+    // Filter di memory: HANYA ambil match dengan state 'open' atau 'pending'.
+    // Jangan pernah meloloskan match 'complete' meskipun winner_id kosong.
+    const openMatches = allMatches.filter(match => match.state === 'open' || match.state === 'pending');
     const completedMatches = allMatches.filter(m => String(m.state || '').toLowerCase() === 'complete');
 
     Logger.log('[getOpenMatches] openMatches=' + JSON.stringify(openMatches));
