@@ -135,7 +135,8 @@ function getBlader(googleId) {
     photo: player[4],
     photoUrl: player[4],
     slogan: player[8] ? String(player[8]) : "",
-    catatan: player[9] ? String(player[9]) : ""
+    catatan: player[9] ? String(player[9]) : "",
+    ost_url: player[10] ? String(player[10]) : ""
   });
 }
 

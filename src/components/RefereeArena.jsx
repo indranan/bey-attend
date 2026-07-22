@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Loader2, Trophy, Swords, RotateCcw, Maximize, Minimize, Smartphone, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -22,7 +22,7 @@ const initialState = {
   previewScores: null,
 };
 
-export default function RefereeArena() {
+export default function RefereeArena({ masterPlayers }) {
   const [state, setState] = useState(initialState.state);
   const [tournamentUrl, setTournamentUrl] = useState(initialState.tournamentUrl);
   const [participants, setParticipants] = useState(initialState.participants);
@@ -32,8 +32,8 @@ export default function RefereeArena() {
   const [scoreHistory, setScoreHistory] = useState([]);
   const [launchFails, setLaunchFails] = useState(initialState.launchFails);
   const [winLimit, setWinLimit] = useState(initialState.winLimit);
+  const [raceToTarget, setRaceToTarget] = useState(4);
   const [swapped, setSwapped] = useState(initialState.swapped);
-  const [isSwapped, setIsSwapped] = useState(false);
   const [showReady, setShowReady] = useState(initialState.showReady);
   const [countdown, setCountdown] = useState(initialState.countdown);
   const [countdownText, setCountdownText] = useState('');
@@ -48,7 +48,25 @@ export default function RefereeArena() {
   const [scoreEvent, setScoreEvent] = useState(null);
   const [p1Fails, setP1Fails] = useState(0);
   const [p2Fails, setP2Fails] = useState(0);
+  const [activeOstId, setActiveOstId] = useState(null);
+  const activeOstIdRef = useRef(activeOstId);
+  useEffect(() => { activeOstIdRef.current = activeOstId; }, [activeOstId]);
+  const ostAudioRef = useRef(null);
+  const [isScoring, setIsScoring] = useState(false);
+
+  const googleIdMap = useMemo(() => {
+    const map = {};
+    (masterPlayers || []).forEach(p => {
+      const gid = p.googleId || p.google_id || p.googleid;
+      if (gid) {
+        const nameKey = String(p.name || p.nickname || '').trim().toLowerCase();
+        if (nameKey) map[nameKey] = String(gid);
+      }
+    });
+    return map;
+  }, [masterPlayers]);
   const [isPortrait, setIsPortrait] = useState(false);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [tournamentState, setTournamentState] = useState('');
   const [completedMatches, setCompletedMatches] = useState([]);
   const [optionalPoints, setOptionalPoints] = useState({});
@@ -62,13 +80,9 @@ export default function RefereeArena() {
   const [isSyncing, setIsSyncing] = useState(false);
   const LEAGUE_POINTS_DISTRIBUTION = [20, 17, 15, 13, 11, 9, 8, 7, 6, 5, 4, 3, 2, 1, 1, 1];
 
-  const bgmRef = useRef(typeof Audio !== "undefined" ? new Audio('/bgm.mp3') : null);
-  const mwinRef = useRef(typeof Audio !== "undefined" ? new Audio('/mwin.mp3') : null);
   const waitPlayerReadyRef = useRef(typeof Audio !== "undefined" ? new Audio('/waitplayerready.mp3') : null);
-  const duckingTimeoutRef = useRef(null);
-  const BGM_BASE_VOLUME = 0.7;
-  const BGM_DUCK_VOLUME = 0.08;
-  const DUCK_DURATION = 2000;
+  const hasPlayedWinSound = useRef(false);
+  const winnerOstRef = useRef(null);
 
   const resetMatch = useCallback(() => {
     setScores({ p1: 0, p2: 0 });
@@ -79,6 +93,18 @@ export default function RefereeArena() {
     setPreviewScores(null);
     setHudPhase('READY');
     setReadyPlayers({ p1: false, p2: false });
+    setActiveOstId(null);
+    hasPlayedWinSound.current = false;
+    setIsScoring(false);
+    if (ostAudioRef.current) {
+      ostAudioRef.current.pause();
+      ostAudioRef.current.currentTime = 0;
+    }
+    if (winnerOstRef.current) {
+      winnerOstRef.current.pause();
+      winnerOstRef.current.currentTime = 0;
+      winnerOstRef.current = null;
+    }
   }, []);
 
   useEffect(() => {
@@ -86,55 +112,15 @@ export default function RefereeArena() {
     setIsPortrait(mql.matches);
     const handler = (e) => setIsPortrait(e.matches);
     mql.addEventListener('change', handler);
-    return () => mql.removeEventListener('change', handler);
-  }, []);
 
-  useEffect(() => {
-    const bgmScore = bgmRef.current;
-    const bgmWinner = mwinRef.current;
-    const bgmReady = waitPlayerReadyRef.current;
-
-    if (bgmWinner) bgmWinner.loop = false;
-    if (bgmScore) bgmScore.loop = true;
-    if (bgmReady) bgmReady.loop = true;
-
-    const isBothReady = readyPlayers.p1 && readyPlayers.p2;
-
-    let activeAudio = null;
-
-    if (hudPhase === 'SCORE') {
-      if (!isBothReady && bgmReady) {
-        activeAudio = bgmReady;
-      } else if (isBothReady && bgmScore) {
-        activeAudio = bgmScore;
-      }
-    } else if (hudPhase === 'PREVIEW' && bgmWinner) {
-      activeAudio = bgmWinner;
-    }
-
-    const allAudios = [bgmScore, bgmWinner, bgmReady];
-    allAudios.forEach(audio => {
-      if (audio && audio !== activeAudio) {
-        audio.pause();
-        audio.currentTime = 0;
-      }
-    });
-
-    if (activeAudio) {
-      if (activeAudio === bgmScore) activeAudio.volume = BGM_BASE_VOLUME;
-      else if (activeAudio === bgmReady) activeAudio.volume = 0.5;
-      else if (activeAudio === bgmWinner) activeAudio.volume = 1;
-      activeAudio.play().catch(e => console.warn("Autoplay blocked:", e));
-    }
+    const onResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', onResize);
 
     return () => {
-      allAudios.forEach(audio => {
-        if (audio) {
-          audio.pause();
-        }
-      });
+      mql.removeEventListener('change', handler);
+      window.removeEventListener('resize', onResize);
     };
-  }, [hudPhase, state, selectedMatch, readyPlayers]);
+  }, []);
 
   useEffect(() => {
     if (showIntro) {
@@ -143,6 +129,74 @@ export default function RefereeArena() {
       readySfx.play().catch(err => console.warn("Readyset SFX autoplay blocked:", err));
     }
   }, [showIntro]);
+
+  useEffect(() => {
+    if (hudPhase === 'SCORE') {
+      console.log("🔥 FASE SCOREBOARD DIMULAI! Cek activeOstId:", activeOstId);
+
+      if (activeOstId) {
+        console.log("🎵 MEMUTAR OST UNTUK:", activeOstId);
+
+        if (ostAudioRef.current) {
+          ostAudioRef.current.pause();
+        }
+
+        const ostPath = `/ost/${activeOstId}.mp3`;
+        ostAudioRef.current = new Audio(ostPath);
+        ostAudioRef.current.loop = true;
+        ostAudioRef.current.volume = 0.6;
+
+        ostAudioRef.current.play()
+          .then(() => console.log("✅ Audio berhasil diputar!"))
+          .catch(err => console.error("❌ Audio diblokir browser atau file tidak ditemukan:", err));
+      } else {
+        console.log("TIDAK ADA OST YANG DIKUNCI.");
+      }
+    }
+  }, [hudPhase, activeOstId]);
+
+  useEffect(() => {
+    if (hudPhase === 'PREVIEW' && !hasPlayedWinSound.current) {
+      hasPlayedWinSound.current = true;
+
+      if (ostAudioRef.current) {
+        ostAudioRef.current.pause();
+        ostAudioRef.current.currentTime = 0;
+      }
+      if (typeof winnerOstRef !== 'undefined' && winnerOstRef.current) {
+        winnerOstRef.current.pause();
+        winnerOstRef.current.currentTime = 0;
+      }
+
+      const winSfx = new Audio('/mwin.mp3');
+      winSfx.play().catch(err => console.error('Gagal play mwin:', err));
+    }
+  }, [hudPhase]);
+
+  const displayMatch = (match, side) => {
+    if (!match) return { name: '-', id: '' };
+    const playerId = !swapped ? (side === 'left' ? match.player1_id : match.player2_id) : (side === 'left' ? match.player2_id : match.player1_id);
+    const name = !swapped ? (side === 'left' ? match.player1_name : match.player2_name) : (side === 'left' ? match.player2_name : match.player1_name);
+    const cleanPlayerName = String(name || '').trim().toLowerCase();
+    const masterData = masterPlayers?.find(p => {
+      const sheetNickname = String(p.nickname || '').trim().toLowerCase();
+      const sheetName = String(p.google_name || p.name || '').trim().toLowerCase();
+      return sheetNickname === cleanPlayerName || sheetName === cleanPlayerName;
+    });
+    const finalPhotoUrl = masterData?.photo_url || masterData?.['photo_url'] || null;
+    return { name, id: playerId, google_id: googleIdMap[cleanPlayerName] || '', photo_url: finalPhotoUrl };
+  };
+
+  const leftPlayer = displayMatch(selectedMatch, 'left');
+  const rightPlayer = displayMatch(selectedMatch, 'right');
+  const leftScore = swapped ? scores.p2 : scores.p1;
+  const rightScore = swapped ? scores.p1 : scores.p2;
+  const leftFails = swapped ? launchFails.p2 : launchFails.p1;
+  const rightFails = swapped ? launchFails.p1 : launchFails.p2;
+  const leftFailSide = swapped ? 'p2' : 'p1';
+  const rightFailSide = swapped ? 'p1' : 'p2';
+  const leftSlot = swapped ? 'p2' : 'p1';
+  const rightSlot = swapped ? 'p1' : 'p2';
 
   useEffect(() => {
     const loadActiveEvent = async () => {
@@ -217,6 +271,10 @@ export default function RefereeArena() {
       const res = result.data;
       if (res?.status === 'success') {
         setParticipants(res.participants || []);
+        console.log("=== DEBUG PARTICIPANTS DATA ===");
+        console.log("Jumlah participants:", res.participants?.length);
+        console.log("Sample participant keys:", res.participants?.[0] ? Object.keys(res.participants[0]) : 'none');
+        console.log("Sample participant data:", res.participants?.[0]);
         const participantMap = {};
         if (res.participants && Array.isArray(res.participants)) {
           res.participants.forEach(p => {
@@ -330,6 +388,11 @@ export default function RefereeArena() {
     setPreviewScores(null);
     setHudPhase('READY');
     setReadyPlayers({ p1: false, p2: false });
+    setActiveOstId(null);
+    if (ostAudioRef.current) {
+      ostAudioRef.current.pause();
+      ostAudioRef.current.currentTime = 0;
+    }
     setState('hud');
   };
 
@@ -338,30 +401,37 @@ export default function RefereeArena() {
     setScores(prev => {
       const next = { ...prev, [side]: prev[side] + points };
       if (state === 'hud' && selectedMatch && hudPhase === 'SCORE') {
-        if (next.p1 >= winLimit || next.p2 >= winLimit) {
+        if (next.p1 >= raceToTarget || next.p2 >= raceToTarget) {
           setPreviewScores({ p1: next.p1, p2: next.p2 });
           setHudPhase('PREVIEW');
+          setIsScoring(false);
+        } else {
+          setTimeout(() => {
+            setReadyPlayers({ p1: false, p2: false });
+            setActiveOstId(null);
+            setHudPhase('READY');
+            setIsScoring(false);
+          }, 2000);
         }
       }
       return next;
     });
   };
 
-  const triggerScoreAnimation = (player, finishType, points, colorHex, audioSrc) => {
-    new Audio(audioSrc).play().catch(e => console.log(e));
-
-    const bgm = bgmRef.current;
-    if (bgm) {
-      bgm.volume = BGM_DUCK_VOLUME;
-      if (duckingTimeoutRef.current) clearTimeout(duckingTimeoutRef.current);
-      duckingTimeoutRef.current = setTimeout(() => {
-        if (bgmRef.current) bgmRef.current.volume = BGM_BASE_VOLUME;
-      }, DUCK_DURATION);
+  const triggerScoreAnimation = (player, finishType, points, colorHex, audioSrc, scoreSlot) => {
+    if (isScoring) return;
+    setIsScoring(true);
+    if (ostAudioRef.current) {
+      ostAudioRef.current.pause();
+      ostAudioRef.current.currentTime = 0;
     }
+    setActiveOstId(null);
+    
+    new Audio(audioSrc).play().catch(e => console.log(e));
 
     setScoreEvent({ type: finishType, player, colorHex });
     setTimeout(() => {
-      handleAddScore(player === 1 ? 'p1' : 'p2', points);
+      handleAddScore(scoreSlot || (player === 1 ? 'p1' : 'p2'), points);
       setScoreEvent(null);
     }, 2000);
   };
@@ -370,16 +440,26 @@ export default function RefereeArena() {
     let timer;
     if (p1Fails === 2) {
       timer = setTimeout(() => {
+        if (ostAudioRef.current) {
+          ostAudioRef.current.pause();
+          ostAudioRef.current.currentTime = 0;
+        }
+        setActiveOstId(null);
         handleAddScore('p2', 1);
         toast.success('Launch Fail! Player 2 mendapat +1 poin');
         setP1Fails(0);
-      }, 1000);
+      }, 4000);
     } else if (p2Fails === 2) {
       timer = setTimeout(() => {
+        if (ostAudioRef.current) {
+          ostAudioRef.current.pause();
+          ostAudioRef.current.currentTime = 0;
+        }
+        setActiveOstId(null);
         handleAddScore('p1', 1);
         toast.success('Launch Fail! Player 1 mendapat +1 poin');
         setP2Fails(0);
-      }, 1000);
+      }, 4000);
     }
     return () => clearTimeout(timer);
   }, [p1Fails, p2Fails]);
@@ -418,8 +498,34 @@ export default function RefereeArena() {
   const playTransitionSfx = () => { new Audio('/transisiReady.mp3').play().catch(e => console.log(e)); };
 
   const handlePlayerReady = (side) => {
+    if (!selectedMatch) return;
+    const targetId = side === 'p1' ? selectedMatch.player1_id : selectedMatch.player2_id;
+
+    const participantData = participants?.find(p => String(p.id) === String(targetId));
+    const playerName = participantData?.name;
+
+    console.log("=== DEBUG MAPPING DATA ===");
+    console.log("Mencari Target ID:", targetId);
+    console.log("Nama Pemain di Turnamen:", playerName);
+    console.log("Data Peserta Ditemukan:", participantData);
+
+    const nameKey = String(playerName || '').trim().toLowerCase();
+    const targetGoogleId = nameKey ? googleIdMap[nameKey] : undefined;
+
+    console.log("Hasil Target Google ID:", targetGoogleId);
+
     setReadyPlayers(prev => {
-      const next = { ...prev, [side]: true };
+      const nextReady = !prev[side];
+      const next = { ...prev, [side]: nextReady };
+
+      if (nextReady && !activeOstId && targetGoogleId) {
+        setActiveOstId(targetGoogleId);
+        console.log("OST BERHASIL DIKUNCI UNTUK:", targetGoogleId);
+      } else if (!nextReady && activeOstId && activeOstId === targetGoogleId) {
+        setActiveOstId(null);
+        console.log("OST DI-UNREADY.");
+      }
+
       return next;
     });
   };
@@ -440,9 +546,12 @@ export default function RefereeArena() {
       setCountdown(c => {
         if (c <= 1) {
           clearInterval(timer);
-          setTimeout(() => {
-            setHudPhase('SCORE');
-          }, 1200);
+             setTimeout(() => {
+               setHudPhase('SCORE');
+               if (waitPlayerReadyRef.current) {
+                 waitPlayerReadyRef.current.pause();
+               }
+             }, 1200);
           return 0;
         }
         return c - 1;
@@ -531,27 +640,12 @@ export default function RefereeArena() {
   };
 
   const winnerName = previewScores
-    ? previewScores.p1 > previewScores.p2
-      ? selectedMatch?.player1_name
-      : previewScores.p2 > previewScores.p1
-        ? selectedMatch?.player2_name
+    ? previewScores[leftSlot] > previewScores[rightSlot]
+      ? leftPlayer.name
+      : previewScores[rightSlot] > previewScores[leftSlot]
+        ? rightPlayer.name
         : null
     : null;
-
-  const displayMatch = (match, side) => {
-    if (!match) return { name: '-', id: '' };
-    if (!swapped) return side === 'left' ? { name: match.player1_name, id: match.player1_id } : { name: match.player2_name, id: match.player2_id };
-    return side === 'left' ? { name: match.player2_name, id: match.player2_id } : { name: match.player1_name, id: match.player1_id };
-  };
-
-  const leftPlayer = displayMatch(selectedMatch, 'left');
-  const rightPlayer = displayMatch(selectedMatch, 'right');
-  const leftScore = swapped ? scores.p2 : scores.p1;
-  const rightScore = swapped ? scores.p1 : scores.p2;
-  const leftFails = swapped ? launchFails.p2 : launchFails.p1;
-  const rightFails = swapped ? launchFails.p1 : launchFails.p2;
-  const leftFailSide = swapped ? 'p2' : 'p1';
-  const rightFailSide = swapped ? 'p1' : 'p2';
 
   const getLiveStandings = (participantList, completedMatchList) => {
     const standingsMap = {};
@@ -620,10 +714,10 @@ export default function RefereeArena() {
   const liveStandings = getLiveStandings(participants, completedMatches);
 
   return (
-      <div className="min-h-screen bg-transparent text-blue-400 font-mono">
+      <div className="select-none min-h-screen bg-transparent text-blue-400 font-mono">
       {/* STATE 1: MATCH SELECTOR */}
       {state === 'selector' && (
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="max-w-md mx-auto p-6 space-y-6">
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-md md:max-w-3xl lg:max-w-5xl mx-auto p-6 md:p-8 space-y-6">
           <div className="text-center space-y-2">
             <h2 className="text-3xl md:text-4xl font-black text-white italic tracking-wider uppercase mb-1 drop-shadow-md">REFEREE HUD</h2>
             <p className="text-[10px] md:text-xs font-bold text-slate-400 tracking-[0.3em] uppercase mb-8">Arena Scoreboard // Challonge Link</p>
@@ -714,9 +808,9 @@ export default function RefereeArena() {
                         </span>
                       </div>
                       <div className="flex flex-col items-center justify-center w-full text-center mt-2">
-                        <p className="text-lg md:text-xl font-black text-white group-hover:text-blue-300 transition-colors tracking-tight text-center">{m.player1_name}</p>
+                         <p className="text-lg md:text-xl font-sans font-bold text-white group-hover:text-blue-300 transition-colors tracking-tight text-center">{m.player1_name}</p>
                         <p className="text-xs font-bold italic text-red-500/80 my-1 text-center">VS</p>
-                        <p className="text-lg md:text-xl font-black text-white group-hover:text-blue-300 transition-colors tracking-tight text-center">{m.player2_name}</p>
+                         <p className="text-lg md:text-xl font-sans font-bold text-white group-hover:text-blue-300 transition-colors tracking-tight text-center">{m.player2_name}</p>
                       </div>
                     </button>
                   ))}
@@ -772,13 +866,13 @@ export default function RefereeArena() {
                             </td>
                             <td className="py-3 px-4 text-center">
                               {p.isTied ? (
-                                <input
-                                  type="number"
-                                  min="0"
-                                  value={optionalPoints[p.id] || ''}
-                                  onChange={(e) => setOptionalPoints(prev => ({ ...prev, [p.id]: parseInt(e.target.value, 10) || 0 }))}
-                                  className="w-16 bg-slate-900 border border-blue-900 rounded px-2 py-1 text-center text-xs text-blue-300 focus:outline-none focus:border-blue-400"
-                                />
+                                 <input
+                                   type="number"
+                                   min="0"
+                                   value={optionalPoints[p.id] || ''}
+                                   onChange={(e) => setOptionalPoints(prev => ({ ...prev, [p.id]: parseInt(e.target.value, 10) || 0 }))}
+                                   className="select-text w-16 bg-slate-900 border border-blue-900 rounded px-2 py-1 text-center text-xs text-blue-300 focus:outline-none focus:border-blue-400"
+                                 />
                               ) : (
                                 <span className="text-slate-600">-</span>
                               )}
@@ -828,14 +922,14 @@ export default function RefereeArena() {
               type="text"
               value={exportSheetName}
               onChange={(e) => setExportSheetName(e.target.value)}
-              className="w-full bg-slate-800 text-gray-200 rounded-full px-4 py-3 font-bold outline-none border border-slate-600 focus:border-blue-400 transition-all mb-6"
+              className="select-text w-full bg-slate-800 text-gray-200 rounded-full px-4 py-3 font-bold outline-none border border-slate-600 focus:border-blue-400 transition-all mb-6"
             />
 
             <div className="flex gap-3">
               <button
                 type="button"
                 onClick={() => setShowExportModal(false)}
-                className="flex-1 py-3 bg-gray-700 text-gray-300 rounded-xl font-black uppercase italic text-xs active:scale-95 transition-all"
+                className="flex-1 py-3 bg-gray-700 text-gray-300 rounded-xl font-sans font-bold uppercase text-xs active:scale-95 transition-all"
               >
                 Batal
               </button>
@@ -843,7 +937,7 @@ export default function RefereeArena() {
                 type="button"
                 onClick={executeExport}
                 disabled={isExporting || !exportSheetName.trim()}
-                className="flex-1 py-3 bg-emerald-600 text-white rounded-xl font-black uppercase italic text-xs shadow-lg shadow-emerald-900/50 active:scale-95 transition-all flex justify-center items-center disabled:opacity-50"
+                className="flex-1 py-3 bg-emerald-600 text-white rounded-xl font-sans font-bold uppercase text-xs shadow-lg shadow-emerald-900/50 active:scale-95 transition-all flex justify-center items-center disabled:opacity-50"
               >
                 {isExporting ? 'Mengirim...' : 'Rekap Sekarang'}
               </button>
@@ -872,80 +966,129 @@ export default function RefereeArena() {
             </div>
           )}
 
-          {hudPhase === 'READY' && (
-            <div className="w-full h-full relative overflow-hidden">
-              {/* Center console line */}
-              <div className="absolute left-1/2 top-0 bottom-0 w-px bg-slate-800 -translate-x-1/2 z-40" />
+           {hudPhase === 'READY' && (
+             <div className="w-full h-full relative overflow-hidden">
+               {/* Laser center divider */}
+                <div className="absolute left-1/2 top-0 bottom-0 w-[2px] bg-gradient-to-b from-transparent via-blue-500 to-transparent -translate-x-1/2 z-0 opacity-50" />
 
-              {/* EXIT button on center line (top) */}
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setSelectedMatch(null);
-                  setScoreHistory([]);
-                  resetMatch();
-                  setState('selector');
-                  handleFetchMatches(tournamentUrl);
-                }}
-                className="absolute top-8 left-1/2 -translate-x-1/2 z-50 px-6 py-2 bg-slate-900/90 rounded-full border border-slate-700 text-xs tracking-widest text-slate-400 hover:text-white"
-              >
-                EXIT
-              </button>
+               {/* EXIT button */}
+               <button
+                 type="button"
+                 onClick={(e) => {
+                   e.stopPropagation();
+                   setSelectedMatch(null);
+                   setScoreHistory([]);
+                   resetMatch();
+                   setState('selector');
+                   handleFetchMatches(tournamentUrl);
+                 }}
+                 className="absolute top-4 left-1/2 -translate-x-1/2 z-50 px-6 py-2 bg-slate-900/90 rounded-full border border-slate-700 text-xs tracking-widest text-slate-400 hover:text-white"
+               >
+                 EXIT
+               </button>
 
-              {/* SWAP button dead center */}
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setIsSwapped(prev => !prev);
-                }}
-                className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 rounded-full bg-slate-900 border border-slate-700 p-4 hover:border-blue-500 hover:text-blue-400 text-slate-400 transition-colors"
-              >
-                ⇆
-              </button>
+               {/* VS badge */}
+               <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20">
+                 <span className="text-3xl md:text-5xl font-black italic text-slate-300 drop-shadow-[0_5px_5px_rgba(0,0,0,1)]">VS</span>
+               </div>
 
-              <div className={`flex w-full h-full transition-all duration-500 ${isSwapped ? 'flex-row-reverse' : 'flex-row'}`}>
-                <motion.div
-                  layout
-                  whileTap={{ scale: 0.98 }}
-                  onClick={() => { playReadySfx(); setReadyPlayers(prev => ({...prev, p1: true})); }}
-                  className="flex-1 flex flex-col items-center justify-center relative p-8 cursor-pointer"
-                >
-                  <div className={`w-32 h-32 sm:w-40 sm:h-40 rounded-full border-4 flex items-center justify-center transition-all ${readyPlayers.p1 ? 'border-blue-400 bg-blue-400/30 shadow-[0_0_40px_rgba(96,165,250,0.5)]' : 'border-blue-400/50 bg-gray-900'}`}>
-                    <span className="text-5xl md:text-7xl font-black text-white drop-shadow-[0_0_15px_#3b82f6] italic">{leftPlayer.name.charAt(0)}</span>
-                  </div>
-                  <h3 className="text-2xl md:text-4xl font-black text-white tracking-tight drop-shadow-[0_0_10px_rgba(59,130,246,0.5)] mb-4 md:mb-8 z-10">{leftPlayer.name}</h3>
-                  <motion.button
-                    whileHover={{ scale: 1.02 }}
-                    onClick={(e) => { e.stopPropagation(); handlePlayerReady('p1'); playReadySfx(); }}
-                    className={`w-3/4 max-w-sm py-8 rounded-2xl border-2 tracking-[0.3em] font-bold text-sm md:text-lg uppercase backdrop-blur-sm transition-colors ${readyPlayers.p1 ? 'border-blue-500 text-blue-100 bg-blue-600/30 drop-shadow-[0_0_15px_#2563EB]' : 'border-slate-600 text-blue-100 bg-slate-800/80 animate-pulse'}`}
-                  >
-                    {readyPlayers.p1 ? 'READY ✓' : 'TAP TO READY'}
-                  </motion.button>
-                </motion.div>
+               {/* SWAP button bottom-center */}
+               <button
+                 type="button"
+                 onClick={(e) => {
+                   e.stopPropagation();
+                   setSwapped(prev => !prev);
+                 }}
+                 className="absolute bottom-10 left-1/2 -translate-x-1/2 z-50 rounded-full bg-slate-900 border border-slate-700 p-3 hover:border-blue-400 hover:text-blue-400 text-slate-400 transition-colors"
+               >
+                 ⇆
+               </button>
 
-                <motion.div
-                  layout
-                  whileTap={{ scale: 0.98 }}
-                  onClick={() => { playReadySfx(); setReadyPlayers(prev => ({...prev, p2: true})); }}
-                  className="flex-1 flex flex-col items-center justify-center relative p-8 cursor-pointer"
-                >
-                  <div className={`w-32 h-32 sm:w-40 sm:h-40 rounded-full border-4 flex items-center justify-center transition-all ${readyPlayers.p2 ? 'border-blue-400 bg-blue-400/30 shadow-[0_0_40px_rgba(96,165,250,0.5)]' : 'border-blue-400/50 bg-gray-900'}`}>
-                    <span className="text-5xl md:text-7xl font-black text-white drop-shadow-[0_0_15px_#3b82f6] italic">{rightPlayer.name.charAt(0)}</span>
-                  </div>
-                  <h3 className="text-2xl md:text-4xl font-black text-white tracking-tight drop-shadow-[0_0_10px_rgba(59,130,246,0.5)] mb-4 md:mb-8 z-10">{rightPlayer.name}</h3>
-                  <motion.button
-                    whileHover={{ scale: 1.02 }}
-                    onClick={(e) => { e.stopPropagation(); handlePlayerReady('p2'); playReadySfx(); }}
-                    className={`w-3/4 max-w-sm py-8 rounded-2xl border-2 tracking-[0.3em] font-bold text-sm md:text-lg uppercase backdrop-blur-sm transition-colors ${readyPlayers.p2 ? 'border-blue-500 text-blue-100 bg-blue-600/30 drop-shadow-[0_0_15px_#2563EB]' : 'border-slate-600 text-blue-100 bg-slate-800/80 animate-pulse'}`}
-                  >
-                    {readyPlayers.p2 ? 'READY ✓' : 'TAP TO READY'}
-                  </motion.button>
-                </motion.div>
-              </div>
-            </div>
-          )}
+               <div className="flex justify-between items-center w-full h-full">
+                 {/* LEFT COLUMN */}
+                 <motion.div
+                   layout
+                    key={swapped ? "p2-node" : "p1-node"}
+                    transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                    whileTap={{ scale: 0.98 }}
+                     onClick={() => { playReadySfx(); handlePlayerReady(swapped ? 'p2' : 'p1'); }}
+                     className="flex-1 flex flex-col justify-center items-center w-full h-full p-4 md:p-8 z-10 gap-4 md:gap-6 cursor-pointer"
+                   >
+                       {(() => { return (
+                         <>
+                             {/* NAMA PEMAIN - NEON BIRU TANPA KOTAK */}
+                             <h3 className="text-2xl sm:text-3xl md:text-4xl font-sans font-bold uppercase text-yellow-500 drop-shadow-[0_0_12px_rgba(234,179,8,0.6)] text-center px-2 whitespace-nowrap overflow-hidden text-ellipsis w-full my-4 md:my-6 z-10">
+                               {swapped ? (selectedMatch?.player2_name || '?') : (selectedMatch?.player1_name || '?')}
+                             </h3>
+
+                         {/* 3. AREA SKOR DENGAN GARIS NEON */}
+                       <div className="w-full max-w-[200px] flex flex-col items-center justify-center my-2">
+                          <div className="w-full h-[2px] bg-gradient-to-r from-transparent via-blue-500 to-transparent opacity-70 mb-4"></div>
+                          
+                          <span className="text-6xl md:text-8xl font-black italic text-transparent bg-clip-text bg-gradient-to-b from-blue-300 to-blue-600 drop-shadow-[0_0_20px_rgba(59,130,246,0.8)]">
+                            {leftScore}
+                          </span>
+                          
+                          <div className="w-full h-[2px] bg-gradient-to-r from-transparent via-blue-500 to-transparent opacity-70 mt-4"></div>
+                       </div>
+
+                       {/* 4. TOMBOL READY */}
+                       <div className="mt-2 w-full max-w-[200px]">
+                         <motion.button
+                           whileHover={{ scale: 1.02 }}
+                           onClick={(e) => { e.stopPropagation(); handlePlayerReady(swapped ? 'p2' : 'p1'); playReadySfx(); }}
+                           className={`w-full py-3 px-4 border font-bold uppercase tracking-widest transition-all rounded ${readyPlayers[swapped ? 'p2' : 'p1'] ? 'border-blue-400 bg-blue-900/60 text-blue-100 font-black shadow-[0_0_20px_rgba(59,130,246,0.7)]' : 'border-slate-600 bg-slate-800/60 text-slate-400 hover:bg-slate-700'}`}
+                         >
+                           {readyPlayers[swapped ? 'p2' : 'p1'] ? 'READY ✓' : 'TAP TO READY'}
+                         </motion.button>
+                       </div>
+                     </>
+                   ); })()}
+                 </motion.div>
+
+                 {/* RIGHT COLUMN */}
+                 <motion.div
+                   layout
+                    key={swapped ? "p1-node" : "p2-node"}
+                    transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                    whileTap={{ scale: 0.98 }}
+                     onClick={() => { playReadySfx(); handlePlayerReady(swapped ? 'p1' : 'p2'); }}
+                     className="flex-1 flex flex-col justify-center items-center w-full h-full p-4 md:p-8 z-10 gap-4 md:gap-6 cursor-pointer"
+                   >
+                       {(() => { return (
+                          <>
+                            {/* NAMA PEMAIN - NEON BIRU TANPA KOTAK */}
+                            <h3 className="text-2xl sm:text-3xl md:text-4xl font-sans font-bold uppercase text-yellow-500 drop-shadow-[0_0_12px_rgba(234,179,8,0.6)] text-center px-2 whitespace-nowrap overflow-hidden text-ellipsis w-full my-4 md:my-6 z-10">
+                              {swapped ? (selectedMatch?.player1_name || '?') : (selectedMatch?.player2_name || '?')}
+                            </h3>
+
+                         {/* 3. AREA SKOR DENGAN GARIS NEON */}
+                       <div className="w-full max-w-[200px] flex flex-col items-center justify-center my-2">
+                          <div className="w-full h-[2px] bg-gradient-to-r from-transparent via-blue-500 to-transparent opacity-70 mb-4"></div>
+                          
+                          <span className="text-6xl md:text-8xl font-black italic text-transparent bg-clip-text bg-gradient-to-b from-blue-300 to-blue-600 drop-shadow-[0_0_20px_rgba(59,130,246,0.8)]">
+                            {rightScore}
+                          </span>
+                          
+                          <div className="w-full h-[2px] bg-gradient-to-r from-transparent via-blue-500 to-transparent opacity-70 mt-4"></div>
+                       </div>
+
+                       {/* 4. TOMBOL READY */}
+                       <div className="mt-2 w-full max-w-[200px]">
+                         <motion.button
+                           whileHover={{ scale: 1.02 }}
+                           onClick={(e) => { e.stopPropagation(); handlePlayerReady(swapped ? 'p1' : 'p2'); playReadySfx(); }}
+                           className={`w-full py-3 px-4 border font-bold uppercase tracking-widest transition-all rounded ${readyPlayers[swapped ? 'p1' : 'p2'] ? 'border-blue-400 bg-blue-900/60 text-blue-100 font-black shadow-[0_0_20px_rgba(59,130,246,0.7)]' : 'border-slate-600 bg-slate-800/60 text-slate-400 hover:bg-slate-700'}`}
+                         >
+                           {readyPlayers[swapped ? 'p1' : 'p2'] ? 'READY ✓' : 'TAP TO READY'}
+                         </motion.button>
+                       </div>
+                     </>
+                   ); })()}
+                 </motion.div>
+               </div>
+             </div>
+           )}
 
           <MatchIntro
             show={showIntro}
@@ -965,10 +1108,9 @@ export default function RefereeArena() {
 
                   {/* PANEL KIRI - PLAYER 1 */}
                   <div className="flex flex-col items-center gap-2">
-                    <div className="w-full border-t-2 border-b-2 border-blue-500 bg-blue-900/20 py-1.5 text-center">
-                      <p className="text-[10px] sm:text-xs font-black text-blue-400 uppercase tracking-[0.2em]">Player 1</p>
-                      <h3 className="text-sm sm:text-base font-black text-blue-300 tracking-tighter leading-tight">{leftPlayer.name}</h3>
-                    </div>
+                     <div className="w-full border-t-2 border-b-2 border-blue-500 bg-blue-900/20 py-1.5 text-center">
+                        <h2 className="text-lg sm:text-xl md:text-2xl font-black uppercase text-yellow-400 tracking-wider text-center px-2 w-full whitespace-nowrap overflow-visible" title={leftPlayer.name}>{swapped ? (selectedMatch?.player2_name || '?') : (selectedMatch?.player1_name || '?')}</h2>
+                     </div>
 
                     <div className="flex-1 flex flex-col justify-center gap-1.5 w-full max-w-[220px] mx-auto">
                       {[
@@ -977,25 +1119,26 @@ export default function RefereeArena() {
                         { key: 'burst', label: 'BURST FINISH', points: 2, border: 'border-fuchsia-500/50', hover: 'hover:bg-fuchsia-500/20 hover:shadow-[0_0_15px_rgba(217,70,239,0.6)]', point: 'text-fuchsia-400', colorHex: '#d946ef', audioSrc: '/finish.mp3' },
                         { key: 'xtreme', label: 'XTREME FINISH', points: 3, border: 'border-yellow-500/50', hover: 'hover:bg-yellow-500/20 hover:shadow-[0_0_15px_rgba(234,179,8,0.6)]', point: 'text-yellow-400', colorHex: '#eab308', audioSrc: '/finish.mp3' },
                       ].map(btn => (
-                        <button
-                          key={btn.key}
-                          type="button"
-                          onClick={() => triggerScoreAnimation(1, btn.label, btn.points, btn.colorHex, btn.audioSrc)}
-                          className={`w-full flex items-center justify-between px-3 sm:px-4 py-2 sm:py-3 bg-black/60 border text-blue-300 font-semibold text-base sm:text-lg uppercase tracking-wider rounded-none active:scale-95 transition-all ${btn.border} ${btn.hover}`}
-                        >
-                          <span>{btn.label}</span>
-                          <span className={`${btn.point} text-xl sm:text-2xl font-bold`}>+{btn.points}</span>
-                        </button>
+                         <button
+                           key={btn.key}
+                           type="button"
+                           onClick={() => triggerScoreAnimation(1, btn.label, btn.points, btn.colorHex, btn.audioSrc, swapped ? 'p2' : 'p1')}
+                           disabled={isScoring}
+                           className={`w-full flex items-center justify-between px-3 sm:px-4 py-2 sm:py-3 bg-black/60 border text-blue-300 font-semibold text-base sm:text-lg uppercase tracking-wider rounded-none active:scale-95 transition-all ${btn.border} ${btn.hover} ${isScoring ? 'opacity-50 cursor-not-allowed' : ''}`}
+                         >
+                           <span>{btn.label}</span>
+                           <span className={`${btn.point} text-xl sm:text-2xl font-bold`}>+{btn.points}</span>
+                         </button>
                       ))}
                     </div>
 
                     <div className="flex items-center gap-2 mt-2">
                       {[0, 1].map(i => (
-                        <div key={i} className={`w-4 h-4 rounded-full border ${i < p1Fails ? 'bg-red-600 border-red-500 shadow-[0_0_8px_rgba(220,38,38,0.6)]' : 'border-blue-700'}`} />
+                        <div key={i} className={`w-4 h-4 rounded-full border ${i < (swapped ? p2Fails : p1Fails) ? 'bg-red-600 border-red-500 shadow-[0_0_8px_rgba(220,38,38,0.6)]' : 'border-blue-700'}`} />
                       ))}
                        <button
                          type="button"
-                         onClick={() => setP1Fails(prev => Math.min(prev + 1, 2))}
+                         onClick={() => (swapped ? setP2Fails : setP1Fails)(prev => Math.min(prev + 1, 2))}
                         className="px-3 py-1 bg-red-900/30 border border-red-700 text-red-400 text-xs font-black uppercase tracking-widest rounded-none hover:bg-red-600/30 active:scale-95 transition-all"
                       >
                         FAIL
@@ -1007,7 +1150,19 @@ export default function RefereeArena() {
                   <div className="flex flex-col items-center justify-center gap-2 sm:gap-3">
                     <div className="w-full border-x-4 border-blue-500 bg-blue-900/10 px-3 sm:px-6 py-1.5 text-center">
                       <p className="text-[10px] sm:text-xs font-black text-blue-400 uppercase tracking-[0.3em]">Babak {selectedMatch?.round ?? 1}</p>
-                      <div className="text-xs text-slate-400">RACE TO {winLimit}</div>
+                      <div className="flex items-center justify-center gap-3 mt-1">
+                        <button
+                          onClick={() => setRaceToTarget(prev => Math.max(4, prev - 1))}
+                          className="w-6 h-6 flex items-center justify-center rounded-full bg-slate-800 text-slate-400 hover:text-white"
+                        > - </button>
+                        <span className="text-xs font-bold tracking-widest text-slate-400 uppercase">
+                          RACE TO {raceToTarget}
+                        </span>
+                        <button
+                          onClick={() => setRaceToTarget(prev => prev + 1)}
+                          className="w-6 h-6 flex items-center justify-center rounded-full bg-slate-800 text-slate-400 hover:text-white"
+                        > + </button>
+                      </div>
                     </div>
 
                     <div className="flex items-center justify-center gap-2 sm:gap-4">
@@ -1042,10 +1197,9 @@ export default function RefereeArena() {
 
                   {/* PANEL KANAN - PLAYER 2 */}
                   <div className="flex flex-col items-center gap-2">
-                    <div className="w-full border-t-2 border-b-2 border-blue-500 bg-blue-900/20 py-1.5 text-center">
-                      <p className="text-[10px] sm:text-xs font-black text-blue-400 uppercase tracking-[0.2em]">Player 2</p>
-                      <h3 className="text-sm sm:text-base font-black text-blue-300 tracking-tighter leading-tight">{rightPlayer.name}</h3>
-                    </div>
+                     <div className="w-full border-t-2 border-b-2 border-blue-500 bg-blue-900/20 py-1.5 text-center">
+                        <h2 className="text-lg sm:text-xl md:text-2xl font-black uppercase text-yellow-400 tracking-wider text-center px-2 w-full whitespace-nowrap overflow-visible" title={rightPlayer.name}>{swapped ? (selectedMatch?.player1_name || '?') : (selectedMatch?.player2_name || '?')}</h2>
+                     </div>
 
                     <div className="flex-1 flex flex-col justify-center gap-1.5 w-full max-w-[220px] mx-auto">
                       {[
@@ -1054,25 +1208,26 @@ export default function RefereeArena() {
                         { key: 'burst', label: 'BURST FINISH', points: 2, border: 'border-fuchsia-500/50', hover: 'hover:bg-fuchsia-500/20 hover:shadow-[0_0_15px_rgba(217,70,239,0.6)]', point: 'text-fuchsia-400', colorHex: '#d946ef', audioSrc: '/finish.mp3' },
                         { key: 'xtreme', label: 'XTREME FINISH', points: 3, border: 'border-yellow-500/50', hover: 'hover:bg-yellow-500/20 hover:shadow-[0_0_15px_rgba(234,179,8,0.6)]', point: 'text-yellow-400', colorHex: '#eab308', audioSrc: '/finish.mp3' },
                       ].map(btn => (
-                        <button
-                          key={btn.key}
-                          type="button"
-                          onClick={() => triggerScoreAnimation(2, btn.label, btn.points, btn.colorHex, btn.audioSrc)}
-                          className={`w-full flex items-center justify-between px-3 sm:px-4 py-2 sm:py-3 bg-black/60 border text-blue-300 font-semibold text-base sm:text-lg uppercase tracking-wider rounded-none active:scale-95 transition-all ${btn.border} ${btn.hover}`}
-                        >
-                          <span>{btn.label}</span>
-                          <span className={`${btn.point} text-xl sm:text-2xl font-bold`}>+{btn.points}</span>
-                        </button>
+                         <button
+                           key={btn.key}
+                           type="button"
+                           onClick={() => triggerScoreAnimation(2, btn.label, btn.points, btn.colorHex, btn.audioSrc, swapped ? 'p1' : 'p2')}
+                           disabled={isScoring}
+                           className={`w-full flex items-center justify-between flex-row-reverse px-3 sm:px-4 py-2 sm:py-3 bg-black/60 border text-blue-300 font-semibold text-base sm:text-lg uppercase tracking-wider rounded-none active:scale-95 transition-all ${btn.border} ${btn.hover} ${isScoring ? 'opacity-50 cursor-not-allowed' : ''}`}
+                         >
+                           <span>{btn.label}</span>
+                           <span className={`${btn.point} text-xl sm:text-2xl font-bold`}>+{btn.points}</span>
+                         </button>
                       ))}
                     </div>
 
                     <div className="flex items-center gap-2 mt-2">
                       {[0, 1].map(i => (
-                        <div key={i} className={`w-4 h-4 rounded-full border ${i < p2Fails ? 'bg-red-600 border-red-500 shadow-[0_0_8px_rgba(220,38,38,0.6)]' : 'border-blue-700'}`} />
+                        <div key={i} className={`w-4 h-4 rounded-full border ${i < (swapped ? p1Fails : p2Fails) ? 'bg-red-600 border-red-500 shadow-[0_0_8px_rgba(220,38,38,0.6)]' : 'border-blue-700'}`} />
                       ))}
                        <button
                          type="button"
-                         onClick={() => setP2Fails(prev => Math.min(prev + 1, 2))}
+                         onClick={() => (swapped ? setP1Fails : setP2Fails)(prev => Math.min(prev + 1, 2))}
                         className="px-3 py-1 bg-red-900/30 border border-red-700 text-red-400 text-xs font-black uppercase tracking-widest rounded-none hover:bg-red-600/30 active:scale-95 transition-all"
                       >
                         FAIL
@@ -1107,63 +1262,63 @@ export default function RefereeArena() {
                     >
                       <Trophy className="w-8 h-8 lg:w-16 lg:h-16"/>
                     </motion.div>
-                    <p className="truncate max-w-full text-center text-5xl lg:text-8xl">{winnerName}</p>
+                     <p className="truncate max-w-full text-center text-5xl lg:text-8xl font-sans font-bold">{winnerName}</p>
                   </div>
                 </div>
 
                 {/* SCOREBOARD: FLEX-1 BALANCING */}
                 <div className="w-full flex flex-row items-stretch justify-center gap-3 lg:gap-8 px-2 lg:px-0">
                   
-                  {/* PLAYER 1 CARD */}
-                  <div className="flex-1 bg-slate-900/80 border border-slate-700 rounded-2xl lg:rounded-[2rem] p-3 py-5 lg:p-8 flex flex-col items-center justify-center gap-3 lg:gap-6 shadow-xl overflow-hidden min-w-0">
-                    <p className="text-[9px] lg:text-xs font-bold text-slate-500 tracking-widest uppercase">Player 1</p>
-                    <p className="text-sm lg:text-2xl font-black text-white text-center leading-tight truncate w-full px-1">{selectedMatch.player1_name}</p>
-                    <div className="flex items-center gap-3 lg:gap-6 mt-1 lg:mt-2">
-                      <motion.button
-                        whileTap={{ scale: 0.8 }}
-                        onClick={() => adjustPreviewScore('p1', -1)}
-                        className="w-10 h-10 lg:w-14 lg:h-14 bg-slate-800 border-2 border-slate-600 rounded-lg lg:rounded-2xl flex items-center justify-center text-lg lg:text-2xl font-bold text-slate-300 hover:bg-blue-600 hover:border-blue-400 hover:text-white transition-all flex-shrink-0"
-                      >
-                        -
-                      </motion.button>
-                      <span className="text-3xl lg:text-5xl font-black text-white w-8 lg:w-16 text-center">{previewScores?.p1 ?? 0}</span>
-                      <motion.button
-                        whileTap={{ scale: 0.8 }}
-                        onClick={() => adjustPreviewScore('p1', 1)}
-                        className="w-10 h-10 lg:w-14 lg:h-14 bg-slate-800 border-2 border-slate-600 rounded-lg lg:rounded-2xl flex items-center justify-center text-lg lg:text-2xl font-bold text-slate-300 hover:bg-blue-600 hover:border-blue-400 hover:text-white transition-all flex-shrink-0"
-                      >
-                        +
-                      </motion.button>
-                    </div>
-                  </div>
+                   {/* PLAYER 1 CARD */}
+                   <div className="flex-1 bg-slate-900/80 border border-slate-700 rounded-2xl lg:rounded-[2rem] p-3 py-5 lg:p-8 flex flex-col items-center justify-center gap-3 lg:gap-6 shadow-xl overflow-hidden min-w-0">
+                     <p className="text-[9px] lg:text-xs font-bold text-slate-500 tracking-widest uppercase">Player 1</p>
+                       <p className="text-sm lg:text-2xl font-bold font-sans uppercase text-white text-center leading-tight truncate w-full px-1" title={leftPlayer.name}>{leftPlayer.name}</p>
+                     <div className="flex items-center gap-3 lg:gap-6 mt-1 lg:mt-2">
+                       <motion.button
+                         whileTap={{ scale: 0.8 }}
+                         onClick={() => adjustPreviewScore(leftSlot, -1)}
+                         className="w-10 h-10 lg:w-14 lg:h-14 bg-slate-800 border-2 border-slate-600 rounded-lg lg:rounded-2xl flex items-center justify-center text-lg lg:text-2xl font-bold text-slate-300 hover:bg-blue-600 hover:border-blue-400 hover:text-white transition-all flex-shrink-0"
+                       >
+                         -
+                       </motion.button>
+                       <span className="text-3xl lg:text-5xl font-black text-white w-8 lg:w-16 text-center">{previewScores?.[leftSlot] ?? 0}</span>
+                       <motion.button
+                         whileTap={{ scale: 0.8 }}
+                         onClick={() => adjustPreviewScore(leftSlot, 1)}
+                         className="w-10 h-10 lg:w-14 lg:h-14 bg-slate-800 border-2 border-slate-600 rounded-lg lg:rounded-2xl flex items-center justify-center text-lg lg:text-2xl font-bold text-slate-300 hover:bg-blue-600 hover:border-blue-400 hover:text-white transition-all flex-shrink-0"
+                       >
+                         +
+                       </motion.button>
+                     </div>
+                   </div>
 
-                  {/* SEPARATOR (Desktop Only) */}
-                  <div className="hidden lg:flex flex-col justify-center items-center">
-                     <span className="text-5xl font-black text-slate-600 pb-12">:</span>
-                  </div>
+                   {/* SEPARATOR (Desktop Only) */}
+                   <div className="hidden lg:flex flex-col justify-center items-center">
+                      <span className="text-5xl font-black text-slate-600 pb-12">:</span>
+                   </div>
 
-                  {/* PLAYER 2 CARD */}
-                  <div className="flex-1 bg-slate-900/80 border border-slate-700 rounded-2xl lg:rounded-[2rem] p-3 py-5 lg:p-8 flex flex-col items-center justify-center gap-3 lg:gap-6 shadow-xl overflow-hidden min-w-0">
-                    <p className="text-[9px] lg:text-xs font-bold text-slate-500 tracking-widest uppercase">Player 2</p>
-                    <p className="text-sm lg:text-2xl font-black text-white text-center leading-tight truncate w-full px-1">{selectedMatch.player2_name}</p>
-                    <div className="flex items-center gap-3 lg:gap-6 mt-1 lg:mt-2">
-                      <motion.button
-                        whileTap={{ scale: 0.8 }}
-                        onClick={() => adjustPreviewScore('p2', -1)}
-                        className="w-10 h-10 lg:w-14 lg:h-14 bg-slate-800 border-2 border-slate-600 rounded-lg lg:rounded-2xl flex items-center justify-center text-lg lg:text-2xl font-bold text-slate-300 hover:bg-blue-600 hover:border-blue-400 hover:text-white transition-all flex-shrink-0"
-                      >
-                        -
-                      </motion.button>
-                      <span className="text-3xl lg:text-5xl font-black text-white w-8 lg:w-16 text-center">{previewScores?.p2 ?? 0}</span>
-                      <motion.button
-                        whileTap={{ scale: 0.8 }}
-                        onClick={() => adjustPreviewScore('p2', 1)}
-                        className="w-10 h-10 lg:w-14 lg:h-14 bg-slate-800 border-2 border-slate-600 rounded-lg lg:rounded-2xl flex items-center justify-center text-lg lg:text-2xl font-bold text-slate-300 hover:bg-blue-600 hover:border-blue-400 hover:text-white transition-all flex-shrink-0"
-                      >
-                        +
-                      </motion.button>
-                    </div>
-                  </div>
+                   {/* PLAYER 2 CARD */}
+                   <div className="flex-1 bg-slate-900/80 border border-slate-700 rounded-2xl lg:rounded-[2rem] p-3 py-5 lg:p-8 flex flex-col items-center justify-center gap-3 lg:gap-6 shadow-xl overflow-hidden min-w-0">
+                     <p className="text-[9px] lg:text-xs font-bold text-slate-500 tracking-widest uppercase">Player 2</p>
+                       <p className="text-sm lg:text-2xl font-bold font-sans uppercase text-white text-center leading-tight truncate w-full px-1" title={rightPlayer.name}>{rightPlayer.name}</p>
+                     <div className="flex items-center gap-3 lg:gap-6 mt-1 lg:mt-2">
+                       <motion.button
+                         whileTap={{ scale: 0.8 }}
+                         onClick={() => adjustPreviewScore(rightSlot, -1)}
+                         className="w-10 h-10 lg:w-14 lg:h-14 bg-slate-800 border-2 border-slate-600 rounded-lg lg:rounded-2xl flex items-center justify-center text-lg lg:text-2xl font-bold text-slate-300 hover:bg-blue-600 hover:border-blue-400 hover:text-white transition-all flex-shrink-0"
+                       >
+                         -
+                       </motion.button>
+                       <span className="text-3xl lg:text-5xl font-black text-white w-8 lg:w-16 text-center">{previewScores?.[rightSlot] ?? 0}</span>
+                       <motion.button
+                         whileTap={{ scale: 0.8 }}
+                         onClick={() => adjustPreviewScore(rightSlot, 1)}
+                         className="w-10 h-10 lg:w-14 lg:h-14 bg-slate-800 border-2 border-slate-600 rounded-lg lg:rounded-2xl flex items-center justify-center text-lg lg:text-2xl font-bold text-slate-300 hover:bg-blue-600 hover:border-blue-400 hover:text-white transition-all flex-shrink-0"
+                       >
+                         +
+                       </motion.button>
+                     </div>
+                   </div>
 
                 </div>
 
@@ -1234,9 +1389,9 @@ export default function RefereeArena() {
                         <div className="flex items-center justify-between">
                           <div className="flex-1 min-w-0">
                             <p className="text-xs lg:text-sm font-black text-blue-400 tracking-widest uppercase mb-1">{match.round < 0 ? `LOWER BRACKET ${-match.round}` : `ROUND ${match.round}`} • MATCH {match.identifier || match.suggested_play_order || index + 1}</p>
-                            <p className="text-xl lg:text-2xl font-black text-white group-hover:text-blue-300 transition-colors tracking-tight truncate">{match.player1_name}</p>
+                             <p className="text-xl lg:text-2xl font-sans font-bold text-white group-hover:text-blue-300 transition-colors tracking-tight truncate">{match.player1_name}</p>
                             <p className="text-sm font-bold italic text-red-500/80 my-1">VS</p>
-                            <p className="text-xl lg:text-2xl font-black text-white group-hover:text-blue-300 transition-colors tracking-tight truncate">{match.player2_name}</p>
+                             <p className="text-xl lg:text-2xl font-sans font-bold text-white group-hover:text-blue-300 transition-colors tracking-tight truncate">{match.player2_name}</p>
                           </div>
                           <div className="text-right ml-4">
                           </div>
@@ -1294,7 +1449,7 @@ export default function RefereeArena() {
                 return (
                   <motion.div
                     className="flex flex-col items-center justify-center italic font-black uppercase tracking-widest leading-none drop-shadow-2xl"
-                    style={{ WebkitTextStroke: `4px ${scoreEvent.colorHex}`, color: 'transparent' }}
+                    style={{ WebkitTextStroke: `${isMobile ? '1.5px' : '4px'} ${scoreEvent.colorHex}`, color: 'transparent' }}
                     initial={{ x: scoreEvent.player === 1 ? '-100vw' : '100vw', opacity: 0, skewX: scoreEvent.player === 1 ? -15 : 15 }}
                     animate={{ x: 0, opacity: 1, skewX: 0 }}
                     exit={{ scale: 1.5, opacity: 0 }}

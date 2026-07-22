@@ -210,7 +210,7 @@ export default function App() {
       // Update state global user agar foto di navbar (pojok kiri atas) langsung reaktif
       if (res.photoUrl) updateUser({ ...user, picture: res.photoUrl });
     } else {
-      toast.error(res?.message || 'Gagal upload foto');
+      toast.error('Gagal upload foto');
     }
     setIsSubmitting(false);
   };
@@ -351,7 +351,7 @@ export default function App() {
       <ProfileModal player={modalProfile} loading={modalLoading} onClose={closeProfile} />
       <Toaster position="top-center" />
 
-      <nav className="max-w-md mx-auto p-4 flex justify-between items-center sticky top-0 bg-gray-50/80 dark:bg-dark-bg/80 backdrop-blur-lg z-50 dark:text-white">
+      <nav className="w-full max-w-md md:max-w-3xl lg:max-w-5xl mx-auto px-4 flex justify-between items-center sticky top-0 bg-gray-50/80 dark:bg-dark-bg/80 backdrop-blur-lg z-50 dark:text-white">
         <div className="flex items-center gap-3 dark:text-white">
           <img src={user.picture} referrerPolicy="no-referrer" className="w-11 h-11 rounded-2xl border-2 border-primary object-cover dark:text-white" alt="avatar" />
           <div>
@@ -374,9 +374,9 @@ export default function App() {
         </div>
       </nav>
 
-      <main className="max-w-md mx-auto p-4 dark:text-white">
+      <main className="w-full max-w-md md:max-w-3xl lg:max-w-5xl mx-auto px-4 dark:text-white">
         {activeTab === 'referee' ? (
-          <RefereeArena key="referee" />
+          <RefereeArena key="referee" masterPlayers={leaderboard} />
         ) : (
           <AnimatePresence mode="wait">
             {activeTab === 'arena' ? (
@@ -426,7 +426,7 @@ export default function App() {
         )}
       </main>
 
-      <nav className="fixed bottom-6 left-1/2 -translate-x-1/2 w-[92%] max-w-md bg-white/80 dark:bg-dark-card/80 backdrop-blur-2xl border border-white/20 dark:border-gray-800 rounded-[2.5rem] p-2 shadow-2xl flex justify-between items-center z-50 dark:text-white">
+      <nav className="fixed bottom-6 left-1/2 -translate-x-1/2 w-[92%] max-w-md md:max-w-3xl lg:max-w-5xl bg-white/80 dark:bg-dark-card/80 backdrop-blur-2xl border border-white/20 dark:border-gray-800 rounded-[2.5rem] p-2 shadow-2xl flex justify-between items-center z-50 dark:text-white">
         <button type="button" onClick={() => setActiveTab('arena')} className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${activeTab === 'arena' ? 'bg-primary dark:text-white shadow-lg' : 'text-gray-400'}`}>
           <MapPin size={18} /><span className="text-[8px] font-black uppercase italic tracking-tighter leading-none">Arena</span>
         </button>

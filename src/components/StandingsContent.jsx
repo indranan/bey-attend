@@ -28,7 +28,7 @@ const StandingsContent = ({ leaderboard, user, onSelect }) => {
   });
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6 pb-20">
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="w-full max-w-md md:max-w-2xl lg:max-w-4xl mx-auto p-6 space-y-6 pb-20">
       <div className="text-center">
         <h2 className="text-2xl font-black italic uppercase tracking-tighter dark:text-white leading-none">KLASEMEN LIGA</h2>
         <p className="text-[10px] text-primary font-black uppercase tracking-[0.3em] mt-2 italic dark:text-white">Peringkat Blader Season Ini</p>
@@ -37,10 +37,10 @@ const StandingsContent = ({ leaderboard, user, onSelect }) => {
         <table className="w-full text-left border-collapse">
           <thead className="bg-gray-50 dark:bg-gray-900/50">
             <tr>
-              <th className="p-4 text-[9px] font-black uppercase text-gray-400 italic">Rank</th>
-              <th className="p-4 text-[9px] font-black uppercase text-gray-400 italic">Blader</th>
-              <th className="p-4 text-center text-[9px] font-black uppercase text-gray-400 italic">Pts</th>
-              <th className="p-4 text-center text-[9px] font-black uppercase text-gray-400 italic">Fin</th>
+              <th className="px-2 py-3 md:px-4 md:py-4 text-[9px] font-black uppercase text-gray-400 italic">Rank</th>
+              <th className="px-2 py-3 md:px-4 md:py-4 text-[9px] font-black uppercase text-gray-400 italic">Blader</th>
+              <th className="px-2 py-3 md:px-4 md:py-4 text-center text-[9px] font-black uppercase text-gray-400 italic">Pts</th>
+              <th className="px-2 py-3 md:px-4 md:py-4 text-center text-[9px] font-black uppercase text-gray-400 italic">Fin</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
@@ -53,7 +53,7 @@ const StandingsContent = ({ leaderboard, user, onSelect }) => {
                   onClick={() => onSelect?.(item)}
                   className={`${isMe ? 'bg-primary/10' : ''} transition-colors cursor-pointer select-none active:scale-[0.99]`}
                 >
-                  <td className="p-4">
+                  <td className="px-2 py-3 md:px-4 md:py-4">
                     <div className="flex flex-col items-center gap-1">
                       <div className={`w-7 h-7 rounded-xl flex items-center justify-center text-xs font-black shadow-sm ${
                         rank === 1 ? 'bg-yellow-400 text-black shadow-yellow-400/40' :
@@ -64,14 +64,14 @@ const StandingsContent = ({ leaderboard, user, onSelect }) => {
                       {getStatusIcon(item.status)}
                     </div>
                   </td>
-                  <td className="p-4">
+                  <td className="px-2 py-3 md:px-4 md:py-4">
                     <div className="flex items-center gap-3">
                       <img src={item.foto || `https://ui-avatars.com/api/?name=${item.name}`} referrerPolicy="no-referrer" className="w-10 h-10 rounded-xl object-cover border-2 border-gray-800 shadow-md" alt="" />
                       <p className={`text-xs font-black text-[15px] tracking-tighter leading-none ${isMe ? 'text-primary' : 'dark:text-white'}`}>{item.name}</p>
                     </div>
                   </td>
-                  <td className="p-4 text-center font-black text-primary italic">{item.point}</td>
-                  <td className="p-4 text-center font-bold text-gray-400 text-[10px]">{item.pointFinish}</td>
+                  <td className="px-2 py-3 md:px-4 md:py-4 text-center font-black text-primary italic">{item.point}</td>
+                  <td className="px-2 py-3 md:px-4 md:py-4 text-center font-bold text-gray-400 text-[10px]">{item.pointFinish}</td>
                 </tr>
               );
             })}

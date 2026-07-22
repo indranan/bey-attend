@@ -88,14 +88,14 @@ export default function MatchIntro({ show, onFinish, audioSrc = '/suara-announce
     timers.push(setTimeout(() => setPhase('3'), 3500));
     timers.push(setTimeout(() => setPhase('2'), 4300));
     timers.push(setTimeout(() => setPhase('1'), 5100));
-    timers.push(setTimeout(() => setPhase('GO'), 5900));
-    timers.push(setTimeout(() => setPhase('SHOOT'), 7150));
-    timers.push(setTimeout(() => setPhase('FADEOUT'), 8750));
+    timers.push(setTimeout(() => setPhase('GO'), 6200));
+    timers.push(setTimeout(() => setPhase('SHOOT'), 7450));
+    timers.push(setTimeout(() => setPhase('FADEOUT'), 9050));
     timers.push(
       setTimeout(() => {
         setPhase(null);
         if (typeof onFinish === 'function') onFinish();
-      }, 9050)
+      }, 9350)
     );
 
     return () => {
