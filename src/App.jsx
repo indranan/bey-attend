@@ -68,7 +68,7 @@ export default function App() {
   };
 
   const refreshLeaderboard = async () => {
-    const res = await getFromGas('getLeaderboard');
+    const res = await getFromGas('getLeaderboard', true);
     if (res && Array.isArray(res)) setLeaderboard(res);
   };
 

@@ -17,10 +17,12 @@ export const postToGas = async (path, payload = {}) => {
   }
 };
 
-export const getFromGas = async (path) => {
-  const cached = cache.get(path);
-  if (cached && Date.now() - cached.time < CACHE_TTL) {
-    return cached.data;
+export const getFromGas = async (path, skipCache = false) => {
+  if (!skipCache) {
+    const cached = cache.get(path);
+    if (cached && Date.now() - cached.time < CACHE_TTL) {
+      return cached.data;
+    }
   }
   try {
     const res = await axios.get(`${GAS_URL}?path=${path}&_t=${Date.now()}`);

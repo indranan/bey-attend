@@ -46,25 +46,81 @@ export default function RefereeArena({ masterPlayers }) {
   const [showIntro, setShowIntro] = useState(false);
   const [readyPlayers, setReadyPlayers] = useState({ p1: false, p2: false });
   const [scoreEvent, setScoreEvent] = useState(null);
-  const [p1Fails, setP1Fails] = useState(0);
-  const [p2Fails, setP2Fails] = useState(0);
   const [activeOstId, setActiveOstId] = useState(null);
   const activeOstIdRef = useRef(activeOstId);
   useEffect(() => { activeOstIdRef.current = activeOstId; }, [activeOstId]);
   const ostAudioRef = useRef(null);
   const [isScoring, setIsScoring] = useState(false);
 
+  const sfxCache = useRef({});
+  const sfxList = [
+    '/finish.mp3',
+    '/mwin.mp3',
+    '/waitplayerready.mp3',
+    '/readyset.mp3',
+    '/buttonReadyKlik.mp3',
+    '/transisiReady.mp3',
+    '/suara-announcer.mp3',
+  ];
+
+  useEffect(() => {
+    sfxList.forEach(src => {
+      const audio = new Audio(src);
+      audio.preload = 'auto';
+      sfxCache.current[src] = audio;
+    });
+  }, []);
+
+  const playSfx = (src) => {
+    const sound = sfxCache.current[src];
+    if (sound) {
+      sound.currentTime = 0;
+      sound.play().catch(e => console.log("Audio play di-block browser", e));
+    }
+  };
+
   const googleIdMap = useMemo(() => {
     const map = {};
+    const cleanName = str => String(str || '').trim().replace(/\s+/g, ' ').toLowerCase();
     (masterPlayers || []).forEach(p => {
       const gid = p.googleId || p.google_id || p.googleid;
       if (gid) {
-        const nameKey = String(p.name || p.nickname || '').trim().toLowerCase();
+        const nameKey = cleanName(p.name);
+        const nickKey = cleanName(p.nickname);
+        const googleNameKey = cleanName(p.google_name);
+
         if (nameKey) map[nameKey] = String(gid);
+        if (nickKey) map[nickKey] = String(gid);
+        if (googleNameKey) map[googleNameKey] = String(gid);
       }
     });
     return map;
   }, [masterPlayers]);
+
+  useEffect(() => {
+    console.log("=== BONGKAR ISI MASTER PLAYERS (DARI SHEET) ===");
+    console.log("Total Data di Master Sheet:", masterPlayers?.length || 0);
+
+    if (masterPlayers && masterPlayers.length > 0) {
+      console.log("Contoh Struktur Data [0]:", masterPlayers[0]);
+
+      const cariNanda = masterPlayers.filter(p => {
+        const rawData = JSON.stringify(p).toLowerCase();
+        return rawData.includes('nanda');
+      });
+
+      console.log("Hasil Pencarian Paksa 'nanda' di Master Sheet:", cariNanda);
+
+      if (cariNanda.length === 0) {
+        console.log("🚨 NANDA TIDAK DITEMUKAN DI MASTER PLAYERS! Berarti API/Backend masih mengirimkan Cache Data Lama.");
+      } else {
+        console.log("✅ NANDA DITEMUKAN! Periksa apakah nama propertinya (key) sesuai dengan yang dipakai di googleIdMap.");
+      }
+    } else {
+      console.log("🚨 DATA MASTER PLAYERS KOSONG/UNDEFINED!");
+    }
+  }, [masterPlayers]);
+
   const [isPortrait, setIsPortrait] = useState(false);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [tournamentState, setTournamentState] = useState('');
@@ -80,7 +136,11 @@ export default function RefereeArena({ masterPlayers }) {
   const [isSyncing, setIsSyncing] = useState(false);
   const LEAGUE_POINTS_DISTRIBUTION = [20, 17, 15, 13, 11, 9, 8, 7, 6, 5, 4, 3, 2, 1, 1, 1];
 
-  const waitPlayerReadyRef = useRef(typeof Audio !== "undefined" ? new Audio('/waitplayerready.mp3') : null);
+  const waitPlayerReadyRef = useRef(null);
+
+  useEffect(() => {
+    waitPlayerReadyRef.current = sfxCache.current['/waitplayerready.mp3'] || new Audio('/waitplayerready.mp3');
+  }, []);
   const hasPlayedWinSound = useRef(false);
   const winnerOstRef = useRef(null);
 
@@ -124,9 +184,12 @@ export default function RefereeArena({ masterPlayers }) {
 
   useEffect(() => {
     if (showIntro) {
-      const readySfx = new Audio('/readyset.mp3');
-      readySfx.volume = 0.8;
-      readySfx.play().catch(err => console.warn("Readyset SFX autoplay blocked:", err));
+      const sound = sfxCache.current['/readyset.mp3'];
+      if (sound) {
+        sound.volume = 0.8;
+        sound.currentTime = 0;
+        sound.play().catch(err => console.warn("Readyset SFX autoplay blocked:", err));
+      }
     }
   }, [showIntro]);
 
@@ -168,8 +231,11 @@ export default function RefereeArena({ masterPlayers }) {
         winnerOstRef.current.currentTime = 0;
       }
 
-      const winSfx = new Audio('/mwin.mp3');
-      winSfx.play().catch(err => console.error('Gagal play mwin:', err));
+      const winSfx = sfxCache.current['/mwin.mp3'];
+      if (winSfx) {
+        winSfx.currentTime = 0;
+        winSfx.play().catch(err => console.error('Gagal play mwin:', err));
+      }
     }
   }, [hudPhase]);
 
@@ -427,7 +493,7 @@ export default function RefereeArena({ masterPlayers }) {
     }
     setActiveOstId(null);
     
-    new Audio(audioSrc).play().catch(e => console.log(e));
+    playSfx(audioSrc);
 
     setScoreEvent({ type: finishType, player, colorHex });
     setTimeout(() => {
@@ -436,33 +502,6 @@ export default function RefereeArena({ masterPlayers }) {
     }, 2000);
   };
 
-  useEffect(() => {
-    let timer;
-    if (p1Fails === 2) {
-      timer = setTimeout(() => {
-        if (ostAudioRef.current) {
-          ostAudioRef.current.pause();
-          ostAudioRef.current.currentTime = 0;
-        }
-        setActiveOstId(null);
-        handleAddScore('p2', 1);
-        toast.success('Launch Fail! Player 2 mendapat +1 poin');
-        setP1Fails(0);
-      }, 4000);
-    } else if (p2Fails === 2) {
-      timer = setTimeout(() => {
-        if (ostAudioRef.current) {
-          ostAudioRef.current.pause();
-          ostAudioRef.current.currentTime = 0;
-        }
-        setActiveOstId(null);
-        handleAddScore('p1', 1);
-        toast.success('Launch Fail! Player 1 mendapat +1 poin');
-        setP2Fails(0);
-      }, 4000);
-    }
-    return () => clearTimeout(timer);
-  }, [p1Fails, p2Fails]);
 
   const handleUndo = () => {
     if (scoreHistory.length === 0) return;
@@ -475,27 +514,78 @@ export default function RefereeArena({ masterPlayers }) {
     setScoreHistory(prev => prev.slice(0, -1));
   };
 
-  const handleLaunchFail = (side) => {
+  const handleLaunchFail = (side, playerName) => {
+    if (isScoring) return;
+    setIsScoring(true);
+
+    if (ostAudioRef.current) {
+      ostAudioRef.current.pause();
+      ostAudioRef.current.currentTime = 0;
+    }
+    setActiveOstId(null);
+
     setLaunchFails(prev => {
       const newCount = prev[side] + 1;
+      const opponent = side === 'p1' ? 'p2' : 'p1';
+
       if (newCount >= 2) {
-        const opponent = side === 'p1' ? 'p2' : 'p1';
-        setScores(s => ({ ...s, [opponent]: s[opponent] + 1 }));
-        toast.success('Launch Fail! Lawan mendapat +1 poin');
+        toast.success(`Launch Fail 2x! Lawan mendapat +1 poin`);
+
+        setScoreEvent({ type: 'FAIL PENALTY', player: playerName, colorHex: '#EF4444' });
+
+        setTimeout(() => {
+          setScoreEvent(null);
+          setIsScoring(false);
+
+          handleAddScore(opponent, 1);
+        }, 3000);
+
         return { ...prev, [side]: 0 };
       } else {
-        toast('Launch Fail ' + newCount + '/2');
+        setScoreEvent({ type: 'LAUNCH FAIL', player: playerName, colorHex: '#EF4444' });
+
+        setTimeout(() => {
+          setScoreEvent(null);
+          setHudPhase('READY');
+          setReadyPlayers({ p1: false, p2: false });
+          setIsScoring(false);
+        }, 3000);
+
         return { ...prev, [side]: newCount };
       }
     });
   };
 
-  const handleSwap = () => {
-    setSwapped(s => !s);
+  const handleRelaunch = () => {
+    if (isScoring) return;
+    setIsScoring(true);
+
+    if (ostAudioRef.current) {
+      ostAudioRef.current.pause();
+      ostAudioRef.current.currentTime = 0;
+    }
+    setActiveOstId(null);
+
+    setScoreEvent({ type: 'RELAUNCH', player: null, colorHex: '#9CA3AF' });
+
+    setTimeout(() => {
+      setScoreEvent(null);
+      setHudPhase('READY');
+      setReadyPlayers({ p1: false, p2: false });
+      setIsScoring(false);
+    }, 3000);
   };
 
-  const playReadySfx = () => { new Audio('/buttonReadyKlik.mp3').play().catch(e => console.log(e)); };
-  const playTransitionSfx = () => { new Audio('/transisiReady.mp3').play().catch(e => console.log(e)); };
+  const handleSwap = () => {
+    setSwapped(s => !s);
+    setLaunchFails(prev => ({
+      p1: prev.p2,
+      p2: prev.p1
+    }));
+  };
+
+  const playReadySfx = () => playSfx('/buttonReadyKlik.mp3');
+  const playTransitionSfx = () => playSfx('/transisiReady.mp3');
 
   const handlePlayerReady = (side) => {
     if (!selectedMatch) return;
@@ -509,8 +599,8 @@ export default function RefereeArena({ masterPlayers }) {
     console.log("Nama Pemain di Turnamen:", playerName);
     console.log("Data Peserta Ditemukan:", participantData);
 
-    const nameKey = String(playerName || '').trim().toLowerCase();
-    const targetGoogleId = nameKey ? googleIdMap[nameKey] : undefined;
+    const cleanName = String(playerName || '').trim().replace(/\s+/g, ' ').toLowerCase();
+    const targetGoogleId = cleanName ? googleIdMap[cleanName] : undefined;
 
     console.log("Hasil Target Google ID:", targetGoogleId);
 
@@ -1132,13 +1222,13 @@ export default function RefereeArena({ masterPlayers }) {
                       ))}
                     </div>
 
-                    <div className="flex items-center gap-2 mt-2">
-                      {[0, 1].map(i => (
-                        <div key={i} className={`w-4 h-4 rounded-full border ${i < (swapped ? p2Fails : p1Fails) ? 'bg-red-600 border-red-500 shadow-[0_0_8px_rgba(220,38,38,0.6)]' : 'border-blue-700'}`} />
-                      ))}
-                       <button
-                         type="button"
-                         onClick={() => (swapped ? setP2Fails : setP1Fails)(prev => Math.min(prev + 1, 2))}
+                     <div className="flex items-center gap-2 mt-2">
+                       {[0, 1].map(i => (
+                         <div key={i} className={`w-4 h-4 rounded-full border ${i < leftFails ? 'bg-red-600 border-red-500 shadow-[0_0_8px_rgba(220,38,38,0.6)]' : 'border-blue-700'}`} />
+                       ))}
+                         <button
+                           type="button"
+                           onClick={() => handleLaunchFail(leftSlot, leftPlayer.name)}
                         className="px-3 py-1 bg-red-900/30 border border-red-700 text-red-400 text-xs font-black uppercase tracking-widest rounded-none hover:bg-red-600/30 active:scale-95 transition-all"
                       >
                         FAIL
@@ -1171,14 +1261,23 @@ export default function RefereeArena({ masterPlayers }) {
                       <span className="text-5xl sm:text-8xl md:text-9xl font-black text-blue-400 drop-shadow-[0_0_20px_rgba(59,130,246,0.8)] leading-none">{rightScore}</span>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={handleUndo}
-                      disabled={scoreHistory.length === 0}
-                      className="w-full max-w-xs py-2 sm:py-3 bg-black/60 border border-orange-600 text-orange-400 font-black text-[10px] sm:text-xs uppercase tracking-widest rounded-none hover:bg-orange-600/30 hover:shadow-[0_0_15px_rgba(234,88,12,0.5)] active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      UNDO
-                    </button>
+                    <div className="flex gap-4 w-full mt-6">
+                      <button 
+                        type="button"
+                        onClick={handleUndo} 
+                        disabled={scoreHistory.length === 0}
+                        className="flex-1 py-3 border border-orange-500 text-orange-500 font-bold uppercase tracking-widest hover:bg-orange-500/20 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        UNDO
+                      </button>
+                      <button 
+                        type="button"
+                        onClick={handleRelaunch} 
+                        className="flex-1 py-3 border border-gray-400 text-gray-400 font-bold uppercase tracking-widest hover:bg-gray-400/20 transition"
+                      >
+                        RELAUNCH
+                      </button>
+                    </div>
 
                     <button
                       type="button"
@@ -1221,13 +1320,13 @@ export default function RefereeArena({ masterPlayers }) {
                       ))}
                     </div>
 
-                    <div className="flex items-center gap-2 mt-2">
-                      {[0, 1].map(i => (
-                        <div key={i} className={`w-4 h-4 rounded-full border ${i < (swapped ? p1Fails : p2Fails) ? 'bg-red-600 border-red-500 shadow-[0_0_8px_rgba(220,38,38,0.6)]' : 'border-blue-700'}`} />
-                      ))}
-                       <button
-                         type="button"
-                         onClick={() => (swapped ? setP1Fails : setP2Fails)(prev => Math.min(prev + 1, 2))}
+                     <div className="flex items-center gap-2 mt-2">
+                       {[0, 1].map(i => (
+                         <div key={i} className={`w-4 h-4 rounded-full border ${i < rightFails ? 'bg-red-600 border-red-500 shadow-[0_0_8px_rgba(220,38,38,0.6)]' : 'border-blue-700'}`} />
+                       ))}
+                         <button
+                           type="button"
+                           onClick={() => handleLaunchFail(rightSlot, rightPlayer.name)}
                         className="px-3 py-1 bg-red-900/30 border border-red-700 text-red-400 text-xs font-black uppercase tracking-widest rounded-none hover:bg-red-600/30 active:scale-95 transition-all"
                       >
                         FAIL
@@ -1446,12 +1545,22 @@ export default function RefereeArena({ masterPlayers }) {
               {(() => {
                 const [word1, word2] = scoreEvent.type.split(' ');
                 const isStacked = scoreEvent.type === 'BURST FINISH' || scoreEvent.type === 'XTREME FINISH';
+                const isRelaunch = scoreEvent.type === 'RELAUNCH';
+                const isLaunchFail = scoreEvent.type === 'LAUNCH FAIL';
+                const isFailPenalty = scoreEvent.type === 'FAIL PENALTY';
+                const playerName = (() => {
+                  if ((isLaunchFail || isFailPenalty) && scoreEvent.player) {
+                    return String(scoreEvent.player).toUpperCase();
+                  }
+                  return null;
+                })();
+
                 return (
                   <motion.div
                     className="flex flex-col items-center justify-center italic font-black uppercase tracking-widest leading-none drop-shadow-2xl"
                     style={{ WebkitTextStroke: `${isMobile ? '1.5px' : '4px'} ${scoreEvent.colorHex}`, color: 'transparent' }}
-                    initial={{ x: scoreEvent.player === 1 ? '-100vw' : '100vw', opacity: 0, skewX: scoreEvent.player === 1 ? -15 : 15 }}
-                    animate={{ x: 0, opacity: 1, skewX: 0 }}
+                    initial={isRelaunch || isLaunchFail || isFailPenalty ? { opacity: 0, scale: 0.8 } : { x: scoreEvent.player === 1 ? '-100vw' : '100vw', opacity: 0, skewX: scoreEvent.player === 1 ? -15 : 15 }}
+                    animate={{ x: 0, opacity: 1, scale: 1, skewX: 0 }}
                     exit={{ scale: 1.5, opacity: 0 }}
                     transition={{ type: 'spring', damping: 15, stiffness: 100 }}
                   >
@@ -1460,6 +1569,17 @@ export default function RefereeArena({ masterPlayers }) {
                         <span style={{ fontSize: '15vw', marginBottom: '-2vw' }}>{word1}</span>
                         <span style={{ fontSize: '12vw' }}>{word2}</span>
                       </>
+                    ) : isRelaunch ? (
+                      <span style={{ fontSize: '12vw' }}>RELAUNCH</span>
+                    ) : isLaunchFail || isFailPenalty ? (
+                      <div className="flex flex-col items-center">
+                        <span style={{ fontSize: '10vw' }}>{scoreEvent.type}</span>
+                        {playerName && (
+                          <span className="text-white" style={{ WebkitTextStroke: '0px', color: 'white', fontSize: '6vw', marginTop: '2vw' }}>
+                            {playerName}
+                          </span>
+                        )}
+                      </div>
                     ) : (
                       <span style={{ fontSize: '10vw' }}>{scoreEvent.type}</span>
                     )}
