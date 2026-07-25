@@ -1,6 +1,5 @@
 import { useContext, useEffect, useState } from 'react';
 import { AuthContext } from './context/AuthContext';
-import { GoogleAuth } from '@codetrix-studio/capacitor-google-auth';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   LogOut, Loader2, MapPin, Trophy, UserCircle, ShieldCheck, Swords, Minimize
@@ -331,14 +330,7 @@ export default function App() {
               type="button"
               onClick={async () => {
                 try {
-                  const googleUser = await GoogleAuth.signIn();
-                  const userData = {
-                    sub: googleUser.id,
-                    email: googleUser.email,
-                    name: googleUser.name,
-                    picture: googleUser.image,
-                  };
-                  login(userData);
+                  await login();
                   toast.success('Login Google berhasil!');
                 } catch (err) {
                   console.error('Google login error:', err);

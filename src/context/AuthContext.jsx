@@ -1,37 +1,21 @@
-import { createContext, useState, useEffect } from 'react';
-import { GoogleAuth } from '@codetrix-studio/capacitor-google-auth';
-import { Capacitor } from '@capacitor/core';
+import { createContext, useState } from 'react';
+import { login as authLogin } from '../auth/authService';
 
 export const AuthContext = createContext();
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(JSON.parse(localStorage.getItem('bey_user')) || null);
 
-  useEffect(() => {
-    const initGoogleAuth = async () => {
-      const isWeb = !Capacitor.isNativePlatform();
-      
-      try {
-        if (isWeb) {
-          await GoogleAuth.initialize({
-            clientId: '323729858315-uppbl49gqf4crr4qu51tt295djr3h0s9.apps.googleusercontent.com',
-            scopes: ['profile', 'email'],
-            grantOfflineAccess: false,
-          });
-        } else {
-          await GoogleAuth.initialize({});
-        }
-      } catch (e) {
-        console.warn('GoogleAuth init gagal:', e);
-      }
-    };
-
-    initGoogleAuth();
-  }, []);
-
-  const login = (userData) => {
-    setUser(userData);
-    localStorage.setItem('bey_user', JSON.stringify(userData));
+  const login = async () => {
+    try {
+      const userData = await authLogin();
+      setUser(userData);
+      localStorage.setItem('bey_user', JSON.stringify(userData));
+      return userData;
+    } catch (err) {
+      console.error('Login failed:', err);
+      throw err;
+    }
   };
 
   const logout = () => {
