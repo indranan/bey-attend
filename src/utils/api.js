@@ -2,12 +2,18 @@ import axios from 'axios';
 
 const GAS_URL = "https://script.google.com/macros/s/AKfycbwqvSTDYgTMOHwc3U85noebAhQb6a-6Nw3xaBjBufbmjM5xAJmLJn94_ytdZYI0zCycUQ/exec";
 
+const AXIOS_TIMEOUT = 15000;
+
+const axiosInstance = axios.create({
+  timeout: AXIOS_TIMEOUT,
+});
+
 const cache = new Map();
 const CACHE_TTL = 120000;
 
 export const postToGas = async (path, payload = {}) => {
   try {
-    const res = await axios.post(`${GAS_URL}?path=${path}`, JSON.stringify(payload), {
+    const res = await axiosInstance.post(`${GAS_URL}?path=${path}`, JSON.stringify(payload), {
       headers: { 'Content-Type': 'text/plain' },
     });
     return res.data;
@@ -25,7 +31,7 @@ export const getFromGas = async (path, skipCache = false) => {
     }
   }
   try {
-    const res = await axios.get(`${GAS_URL}?path=${path}&_t=${Date.now()}`);
+    const res = await axiosInstance.get(`${GAS_URL}?path=${path}&_t=${Date.now()}`);
     const data = res.data;
     cache.set(path, { data, time: Date.now() });
     return data;
@@ -52,7 +58,7 @@ export const getOpenMatches = (tournamentUrl, forceRefresh = false) => {
   if (cached && Date.now() - cached.time < CACHE_TTL) {
     return { data: cached.data, raw: null };
   }
-  return axios.get(`${GAS_URL}?path=${path}&_t=${Date.now()}`).then(res => {
+  return axiosInstance.get(`${GAS_URL}?path=${path}&_t=${Date.now()}`).then(res => {
     cache.set(path, { data: res.data, time: Date.now() });
     return { data: res.data, raw: res };
   }).catch(err => {

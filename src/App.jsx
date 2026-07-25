@@ -1,7 +1,6 @@
 import { useContext, useEffect, useState } from 'react';
 import { AuthContext } from './context/AuthContext';
-import { GoogleLogin } from '@react-oauth/google';
-import { jwtDecode } from 'jwt-decode';
+import { GoogleAuth } from '@codetrix-studio/capacitor-google-auth';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   LogOut, Loader2, MapPin, Trophy, UserCircle, ShieldCheck, Swords, Minimize
@@ -63,29 +62,60 @@ export default function App() {
   };
 
   const refreshEvent = async () => {
-    const res = await getFromGas('getEvent');
-    if (res) setData(res);
+    try {
+      const res = await getFromGas('getEvent');
+      if (res) setData(res);
+    } catch (err) {
+      console.error('Gagal fetch event:', err);
+    }
   };
 
   const refreshLeaderboard = async () => {
-    const res = await getFromGas('getLeaderboard', true);
-    if (res && Array.isArray(res)) setLeaderboard(res);
+    try {
+      const res = await getFromGas('getLeaderboard', true);
+      if (res && Array.isArray(res)) setLeaderboard(res);
+    } catch (err) {
+      console.error('Gagal fetch leaderboard:', err);
+    }
   };
 
   const checkProfile = async () => {
-    const res = await getFromGas(`getBlader&googleId=${user.sub}`);
-    if (res?.registered) {
-      setBlader(res);
-      setIsOnboarding(false);
-    } else {
+    try {
+      const res = await getFromGas(`getBlader&googleId=${user.sub}`);
+      if (res?.registered) {
+        setBlader(res);
+        setIsOnboarding(false);
+      } else {
+        setIsOnboarding(true);
+      }
+    } catch (err) {
+      console.error('Gagal fetch profile:', err);
       setIsOnboarding(true);
     }
   };
 
+  const withTimeout = (promise, ms, label) => {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout: '+label+' (> '+ms+'ms)')), ms))
+    ]);
+  };
+
   const initApp = async () => {
     setLoading(true);
-    await Promise.all([checkProfile(), getFromGas('getSettings').then(setSettings), refreshEvent(), refreshLeaderboard()]);
-    setLoading(false);
+    try {
+      await Promise.all([
+        withTimeout(checkProfile(), 15000, 'checkProfile'),
+        withTimeout(getFromGas('getSettings').then(setSettings), 15000, 'getSettings'),
+        withTimeout(refreshEvent(), 15000, 'refreshEvent'),
+        withTimeout(refreshLeaderboard(), 15000, 'refreshLeaderboard'),
+      ]);
+    } catch (err) {
+      console.error('Gagal inisialisasi app:', err);
+      toast.error('Gagal memuat data. Periksa koneksi internet.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -296,7 +326,35 @@ export default function App() {
           <Trophy className="text-primary mx-auto mb-4 dark:text-white" size={48} />
           <h1 className="text-3xl font-black text-primary mb-2 italic uppercase tracking-tighter dark:text-white">Lalapan Beyblade X lamongan</h1>
           <p className="text-gray-400 text-[10px] mb-8 font-black uppercase tracking-[0.3em] italic leading-tight dark:text-white">Blader Identity Presence</p>
-          <div className="flex justify-center dark:text-white"><GoogleLogin onSuccess={(res) => login(jwtDecode(res.credential))} theme="filled_blue" shape="pill" /></div>
+          <div className="flex flex-col items-center gap-3">
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  const googleUser = await GoogleAuth.signIn();
+                  const userData = {
+                    sub: googleUser.id,
+                    email: googleUser.email,
+                    name: googleUser.name,
+                    picture: googleUser.image,
+                  };
+                  login(userData);
+                  toast.success('Login Google berhasil!');
+                } catch (err) {
+                  console.error('Google login error:', err);
+                  const msg = err?.message || '';
+                  if (msg.includes('server_error') || msg.includes('500')) {
+                    toast.error('Login Google gagal: Server error. Pastikan localhost di-whitelist di Google Cloud Console.');
+                  } else {
+                    toast.error('Login Google gagal: ' + msg);
+                  }
+                }
+              }}
+              className="mt-2 px-6 py-3 bg-blue-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest active:scale-95 transition-all"
+            >
+              Login Google
+            </button>
+          </div>
         </motion.div>
       </div>
     );
@@ -332,7 +390,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-dark-bg transition-colors duration-500 pb-28 dark:text-white">
+    <div className="min-h-screen bg-gray-50 dark:bg-dark-bg transition-colors duration-500 pb-28 pt-[max(env(safe-area-inset-top),1.5rem)] dark:text-white">
       <CreateEventModal
         show={showEventModal}
         onClose={() => setShowEventModal(false)}
@@ -351,7 +409,7 @@ export default function App() {
       <ProfileModal player={modalProfile} loading={modalLoading} onClose={closeProfile} />
       <Toaster position="top-center" />
 
-      <nav className="w-full max-w-md md:max-w-3xl lg:max-w-5xl mx-auto px-4 flex justify-between items-center sticky top-0 bg-gray-50/80 dark:bg-dark-bg/80 backdrop-blur-lg z-50 dark:text-white">
+      <nav className="w-full max-w-md md:max-w-3xl lg:max-w-5xl mx-auto px-4 flex justify-between items-center sticky top-0 pt-[max(env(safe-area-inset-top),1rem)] bg-gray-50 dark:bg-dark-bg backdrop-blur-lg z-50 dark:text-white">
         <div className="flex items-center gap-3 dark:text-white">
           <img src={user.picture} referrerPolicy="no-referrer" className="w-11 h-11 rounded-2xl border-2 border-primary object-cover dark:text-white" alt="avatar" />
           <div>

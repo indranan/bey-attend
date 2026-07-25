@@ -1,0 +1,8 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Lalapan Bey Lmg</string>
+    <string name="title_activity_main">Lalapan Bey Lmg</string>
+    <string name="package_name">com.lalapan.beylamongan</string>
+    <string name="custom_url_scheme">com.lalapan.beylamongan</string>
+    <string name="server_client_id">323729858315-uppbl49gqf4crr4qu51tt295djr3h0s9.apps.googleusercontent.com</string>
+</resources>
