@@ -1,9 +1,9 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import { Swords, ScrollText, X } from 'lucide-react';
+import UserAvatar from './UserAvatar';
 
 const ProfileModal = ({ player, loading, onClose }) => {
   const open = Boolean(player);
-  const foto = player?.foto || `https://ui-avatars.com/api/?name=${player?.name || 'B'}`;
 
   return (
     <AnimatePresence>
@@ -36,12 +36,7 @@ const ProfileModal = ({ player, loading, onClose }) => {
             ) : (
               <>
                 <div className="relative w-28 h-28 mx-auto mb-4">
-                  <img
-                    src={foto}
-                    referrerPolicy="no-referrer"
-                    className="w-full h-full rounded-[2rem] border-4 border-primary shadow-lg object-cover"
-                    alt="avatar"
-                  />
+                  <UserAvatar src={player?.foto} name={player?.name} className="w-full h-full rounded-[2rem] border-4 border-primary shadow-lg" />
                   <div className="absolute -bottom-2 -right-2 bg-primary text-white p-2 rounded-xl shadow-lg">
                     <Swords size={16} />
                   </div>

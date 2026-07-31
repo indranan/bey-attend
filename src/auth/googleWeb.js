@@ -98,3 +98,13 @@ const fallbackWebLogin = async () => {
     });
   });
 };
+
+export const logoutWeb = async () => {
+  if (typeof window !== 'undefined' && window.google?.accounts?.id) {
+    try {
+      window.google.accounts.id.disableAutoSelect();
+    } catch (err) {
+      console.error('disableAutoSelect failed:', err);
+    }
+  }
+};

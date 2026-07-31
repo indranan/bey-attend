@@ -10,3 +10,12 @@ export const loginNative = async () => {
     picture: result.image,
   };
 };
+
+export const logoutNative = async () => {
+  try {
+    await GoogleAuth.initialize({});
+    await GoogleAuth.signOut();
+  } catch (err) {
+    console.error('Native sign out failed:', err);
+  }
+};

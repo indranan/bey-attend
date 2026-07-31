@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Trophy, Edit3, Loader2, Quote } from 'lucide-react';
 import PhotoUploader from './PhotoUploader';
+import UserAvatar from './UserAvatar';
 
 const ProfileContent = ({ blader, user, settings, leaderboard, onUpdateNickname, onUpdateBio, onUploadPhoto, isSubmitting }) => {
   const [isEditingNick, setIsEditingNick] = useState(false);
@@ -32,7 +33,7 @@ const ProfileContent = ({ blader, user, settings, leaderboard, onUpdateNickname,
     <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-6">
       <div className="bg-white dark:bg-dark-card rounded-[2.5rem] p-8 text-center shadow-sm border border-gray-100 dark:border-gray-800 dark:text-white">
         <div className="relative w-24 h-24 mx-auto mb-4">
-          <img src={photo} referrerPolicy="no-referrer" className="w-full h-full rounded-3xl border-4 border-primary shadow-lg object-cover" alt="profile" />
+          <UserAvatar src={photo} name={user?.name} className="w-full h-full rounded-3xl border-4 border-primary shadow-lg" />
           <div className="absolute -bottom-2 -right-2 bg-primary dark:text-white p-2 rounded-xl"><Trophy size={16} /></div>
         </div>
 
