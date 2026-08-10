@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const GAS_URL = "https://script.google.com/macros/s/AKfycbwqvSTDYgTMOHwc3U85noebAhQb6a-6Nw3xaBjBufbmjM5xAJmLJn94_ytdZYI0zCycUQ/exec";
+const GAS_URL = "https://script.google.com/macros/s/AKfycbw7wTkn6ZTq5AUKvufM4sp6GduhBgsVgRl3gnT4uJW07wQggS3v1N8z4-YRls1lm7k-/exec";
 
 const AXIOS_TIMEOUT = 15000;
 
@@ -76,3 +76,7 @@ export const createTournament = (eventId, format, swissRounds) => postToGas('cre
 export const updateSwissRounds = (payload) => postToGas('updateSwissRounds', payload);
 export const getActiveEvent = () => getFromGas('getActiveEvent');
 export const manualSync = (payload) => postToGas('manualSync', payload);
+
+// --- Rule of the Month ---
+export const getRule = () => getFromGas('getRule');
+export const saveRule = (payload) => postToGas('saveRule', payload);

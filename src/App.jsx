@@ -5,7 +5,7 @@ import UserAvatar from './components/UserAvatar';
 import PullToRefresh from 'react-simple-pull-to-refresh';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
-  LogOut, Loader2, MapPin, Trophy, UserCircle, ShieldCheck, Swords, Minimize
+  LogOut, Loader2, MapPin, Trophy, UserCircle, ShieldCheck, Swords, Minimize, BookOpen
 } from 'lucide-react';
 import toast, { Toaster } from 'react-hot-toast';
 import { getFromGas, postToGas, updateBio, uploadProfilePhoto, updatePoints, createTournament } from './utils/api';
@@ -16,6 +16,7 @@ import ParticipantList from './components/ParticipantList';
 import StandingsContent from './components/StandingsContent';
 import AdminContent from './components/AdminContent';
 import ProfileContent from './components/ProfileContent';
+import Rule from './components/Rule';
 import ProfileModal from './components/ProfileModal';
 import RefereeArena from './components/RefereeArena';
 
@@ -485,6 +486,8 @@ export default function App() {
                 </motion.div>
               ) : activeTab === 'standings' ? (
                 <StandingsContent key="standings" leaderboard={leaderboard} user={user} onSelect={openProfile} />
+              ) : activeTab === 'rule' ? (
+                <Rule key="rule" />
               ) : activeTab === 'admin' ? (
                 <AdminContent
                   key="admin"
@@ -523,6 +526,9 @@ export default function App() {
         </button>
         <button type="button" onClick={() => setActiveTab('standings')} className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${activeTab === 'standings' ? 'bg-primary dark:text-white shadow-lg' : 'text-gray-400'}`}>
           <Trophy size={18} /><span className="text-[8px] font-black uppercase italic tracking-tighter leading-none">Standings</span>
+        </button>
+        <button type="button" onClick={() => setActiveTab('rule')} className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${activeTab === 'rule' ? 'bg-primary dark:text-white shadow-lg' : 'text-gray-400'}`}>
+          <BookOpen size={18} /><span className="text-[8px] font-black uppercase italic tracking-tighter leading-none">Rule</span>
         </button>
         {blader?.role === 'Admin' && (
           <>

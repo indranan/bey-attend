@@ -136,7 +136,7 @@ export default function RefereeArena({ masterPlayers }) {
   const [isSearching, setIsSearching] = useState(true);
   const [lastFetchTs, setLastFetchTs] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
-  const LEAGUE_POINTS_DISTRIBUTION = [20, 17, 15, 13, 11, 9, 8, 7, 6, 5, 4, 3, 2, 1, 1, 1];
+  const LEAGUE_POINTS_DISTRIBUTION = [25, 20, 16, 13, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 1];
 
   const waitPlayerReadyRef = useRef(null);
 
@@ -1184,7 +1184,7 @@ export default function RefereeArena({ masterPlayers }) {
                        <div className="w-full max-w-[200px] flex flex-col items-center justify-center my-2">
                           <div className="w-full h-[2px] bg-gradient-to-r from-transparent via-blue-500 to-transparent opacity-70 mb-4"></div>
                           
-                          <span className="text-6xl md:text-8xl font-black italic text-transparent bg-clip-text bg-gradient-to-b from-blue-300 to-blue-600 drop-shadow-[0_0_20px_rgba(59,130,246,0.8)]">
+                          <span className="text-6xl md:text-8xl font-black text-transparent bg-clip-text bg-gradient-to-b from-blue-300 to-blue-600 drop-shadow-[0_0_20px_rgba(59,130,246,0.8)]">
                             {leftScore}
                           </span>
                           
@@ -1225,7 +1225,7 @@ export default function RefereeArena({ masterPlayers }) {
                        <div className="w-full max-w-[200px] flex flex-col items-center justify-center my-2">
                           <div className="w-full h-[2px] bg-gradient-to-r from-transparent via-blue-500 to-transparent opacity-70 mb-4"></div>
                           
-                          <span className="text-6xl md:text-8xl font-black italic text-transparent bg-clip-text bg-gradient-to-b from-blue-300 to-blue-600 drop-shadow-[0_0_20px_rgba(59,130,246,0.8)]">
+                          <span className="text-6xl md:text-8xl font-black text-transparent bg-clip-text bg-gradient-to-b from-blue-300 to-blue-600 drop-shadow-[0_0_20px_rgba(59,130,246,0.8)]">
                             {rightScore}
                           </span>
                           

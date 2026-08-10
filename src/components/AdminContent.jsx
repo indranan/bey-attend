@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
-import { ShieldCheck } from 'lucide-react';
+import { ShieldCheck, BookOpen } from 'lucide-react';
+import { getFromGas, saveRule } from '../utils/api';
 
 const AdminContent = ({ onCreateEvent, onGenerateTournament, onUpdatePoints, onToggleNickname, nicknameAllowed, leaderboard, isSubmitting, isGenerating, isUpdatingPoints, eventId }) => {
   const [format, setFormat] = useState('weekly'); // 'weekly' | 'final'
@@ -9,6 +10,12 @@ const AdminContent = ({ onCreateEvent, onGenerateTournament, onUpdatePoints, onT
   const [selectedId, setSelectedId] = useState('');
   const [point, setPoint] = useState('');
   const [pointFinish, setPointFinish] = useState('');
+
+  const [ruleTitle, setRuleTitle] = useState('');
+  const [ruleImageUrl, setRuleImageUrl] = useState('');
+  const [ruleWarning, setRuleWarning] = useState('');
+  const [ruleDetails, setRuleDetails] = useState('');
+  const [isSavingRule, setIsSavingRule] = useState(false);
 
   const players = Array.isArray(leaderboard) ? leaderboard : [];
 
@@ -21,6 +28,44 @@ const AdminContent = ({ onCreateEvent, onGenerateTournament, onUpdatePoints, onT
     });
     if (res?.status === 'success') {
       setSelectedId(''); setPoint(''); setPointFinish('');
+    }
+  };
+
+  useEffect(() => {
+    const loadRule = async () => {
+      try {
+        const res = await getFromGas('getRule');
+        if (res) {
+          setRuleTitle(res.rule_title || '');
+          setRuleImageUrl(res.rule_image_url || '');
+          setRuleWarning(res.rule_warning || '');
+          setRuleDetails(res.rule_details || '');
+        }
+      } catch (err) {
+        console.error('Gagal fetch rule:', err);
+      }
+    };
+    loadRule();
+  }, []);
+
+  const handleSaveRule = async () => {
+    setIsSavingRule(true);
+    try {
+      const res = await saveRule({
+        rule_title: ruleTitle,
+        rule_image_url: ruleImageUrl,
+        rule_warning: ruleWarning,
+        rule_details: ruleDetails
+      });
+      if (res?.status === 'success') {
+        toast.success('Rule berhasil disimpan!');
+      } else {
+        toast.error(res?.message || 'Gagal menyimpan rule');
+      }
+    } catch {
+      toast.error('Gagal menyimpan rule');
+    } finally {
+      setIsSavingRule(false);
     }
   };
 
@@ -143,6 +188,47 @@ const AdminContent = ({ onCreateEvent, onGenerateTournament, onUpdatePoints, onT
           >
             <ShieldCheck size={14} />
             {nicknameAllowed ? 'Nickname Terbuka (klik untuk tutup)' : 'Nickname Ditutup (klik untuk buka)'}
+          </button>
+        </div>
+
+        <div className="border-t border-gray-100 dark:border-gray-800 pt-4 space-y-3">
+          <div className="text-center border-b border-gray-100 dark:border-gray-800 pb-4">
+            <h3 className="text-xs font-black uppercase italic dark:text-gray-400">Rule of the Month</h3>
+          </div>
+          <input
+            value={ruleTitle}
+            onChange={(e) => setRuleTitle(e.target.value)}
+            placeholder="Judul Rule"
+            className="w-full p-3 bg-gray-100 dark:bg-gray-800 rounded-xl text-center font-bold outline-none border-2 border-transparent focus:border-primary dark:text-white text-xs"
+          />
+          <textarea
+            value={ruleImageUrl}
+            onChange={(e) => setRuleImageUrl(e.target.value)}
+            placeholder="Masukkan link gambar (Google Drive/Lainnya). Jika lebih dari satu, pisahkan dengan Enter (baris baru)"
+            rows={3}
+            className="w-full p-3 bg-gray-100 dark:bg-gray-800 rounded-xl text-center font-bold outline-none border-2 border-transparent focus:border-primary dark:text-white text-xs resize-none"
+          />
+          <textarea
+            value={ruleWarning}
+            onChange={(e) => setRuleWarning(e.target.value)}
+            placeholder="Peringatan Rule"
+            rows={2}
+            className="w-full p-3 bg-gray-100 dark:bg-gray-800 rounded-xl text-center font-bold outline-none border-2 border-transparent focus:border-primary dark:text-white text-xs resize-none"
+          />
+          <textarea
+            value={ruleDetails}
+            onChange={(e) => setRuleDetails(e.target.value)}
+            placeholder="Detail Rule"
+            rows={3}
+            className="w-full p-3 bg-gray-100 dark:bg-gray-800 rounded-xl text-center font-bold outline-none border-2 border-transparent focus:border-primary dark:text-white text-xs resize-none"
+          />
+          <button
+            type="button"
+            onClick={handleSaveRule}
+            disabled={isSavingRule}
+            className="w-full py-3 bg-primary dark:text-white rounded-2xl font-black uppercase italic text-xs shadow-lg shadow-primary/30 active:scale-95 transition-all disabled:opacity-50"
+          >
+            {isSavingRule ? 'MENYIMPAN...' : 'Simpan Rule'}
           </button>
         </div>
       </div>
