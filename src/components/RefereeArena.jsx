@@ -3,6 +3,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Loader2, Trophy, Swords, RotateCcw, Maximize, Minimize, Smartphone, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getOpenMatches, submitMatchScore, startTournament, getActiveEvent, postToGas } from '../utils/api';
+import { ScreenOrientation } from '@capacitor/screen-orientation';
+import { StatusBar } from '@capacitor/status-bar';
 import MatchIntro from './MatchIntro';
 
 const initialState = {
@@ -54,13 +56,13 @@ export default function RefereeArena({ masterPlayers }) {
 
   const sfxCache = useRef({});
   const sfxList = [
-    '/finish.mp3',
-    '/mwin.mp3',
-    '/waitplayerready.mp3',
-    '/readyset.mp3',
-    '/buttonReadyKlik.mp3',
-    '/transisiReady.mp3',
-    '/suara-announcer.mp3',
+    '/sfx-finish.mp3',
+    '/sfx-win.mp3',
+    '/voice-waiting.mp3',
+    '/voice-readyset.mp3',
+    '/sfx-click.mp3',
+    '/sfx-transition.mp3',
+    '/voice-announcer.mp3',
   ];
 
   useEffect(() => {
@@ -134,12 +136,12 @@ export default function RefereeArena({ masterPlayers }) {
   const [isSearching, setIsSearching] = useState(true);
   const [lastFetchTs, setLastFetchTs] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
-  const LEAGUE_POINTS_DISTRIBUTION = [20, 17, 15, 13, 11, 9, 8, 7, 6, 5, 4, 3, 2, 1, 1, 1];
+  const LEAGUE_POINTS_DISTRIBUTION = [25, 20, 16, 13, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 1];
 
   const waitPlayerReadyRef = useRef(null);
 
   useEffect(() => {
-    waitPlayerReadyRef.current = sfxCache.current['/waitplayerready.mp3'] || new Audio('/waitplayerready.mp3');
+    waitPlayerReadyRef.current = sfxCache.current['/voice-waiting.mp3'] || new Audio('/voice-waiting.mp3');
   }, []);
   const hasPlayedWinSound = useRef(false);
   const winnerOstRef = useRef(null);
@@ -184,7 +186,7 @@ export default function RefereeArena({ masterPlayers }) {
 
   useEffect(() => {
     if (showIntro) {
-      const sound = sfxCache.current['/readyset.mp3'];
+      const sound = sfxCache.current['/voice-readyset.mp3'];
       if (sound) {
         sound.volume = 0.8;
         sound.currentTime = 0;
@@ -192,6 +194,50 @@ export default function RefereeArena({ masterPlayers }) {
       }
     }
   }, [showIntro]);
+
+  useEffect(() => {
+    const applyHudMode = async () => {
+      if (state === 'hud') {
+        try {
+          await ScreenOrientation.lock({ type: 'landscape' });
+          console.log('HUD: landscape locked');
+        } catch (e) {
+          console.error('HUD: lock landscape gagal', e);
+        }
+
+        try {
+          await StatusBar.hide();
+          console.log('HUD: status bar hidden');
+        } catch (e) {
+          console.error('HUD: hide status bar gagal', e);
+        }
+      } else {
+        try {
+          await StatusBar.show();
+        } catch (e) {
+          console.error('HUD: show status bar gagal', e);
+        }
+
+        try {
+          await ScreenOrientation.unlock();
+          console.log('HUD: orientation unlocked');
+        } catch (e) {
+          console.error('HUD: unlock gagal', e);
+        }
+      }
+    };
+
+    applyHudMode();
+
+    return () => {
+      ScreenOrientation.unlock().catch((e) =>
+        console.error('HUD cleanup: unlock gagal', e)
+      );
+      StatusBar.show().catch((e) =>
+        console.error('HUD cleanup: show status bar gagal', e)
+      );
+    };
+  }, [state]);
 
   useEffect(() => {
     if (hudPhase === 'SCORE') {
@@ -231,7 +277,7 @@ export default function RefereeArena({ masterPlayers }) {
         winnerOstRef.current.currentTime = 0;
       }
 
-      const winSfx = sfxCache.current['/mwin.mp3'];
+      const winSfx = sfxCache.current['/sfx-win.mp3'];
       if (winSfx) {
         winSfx.currentTime = 0;
         winSfx.play().catch(err => console.error('Gagal play mwin:', err));
@@ -444,7 +490,7 @@ export default function RefereeArena({ masterPlayers }) {
     }
   };
 
-  const handleSelectMatch = (match) => {
+  const handleSelectMatch = async (match) => {
     setSelectedMatch(match);
     setScores({ p1: 0, p2: 0 });
     setLaunchFails({ p1: 0, p2: 0 });
@@ -459,7 +505,27 @@ export default function RefereeArena({ masterPlayers }) {
       ostAudioRef.current.pause();
       ostAudioRef.current.currentTime = 0;
     }
-    setState('hud');
+    setTimeout(() => {
+      setState('hud');
+    }, 400);
+  };
+
+  const restorePortrait = async () => {
+    try {
+      await StatusBar.show();
+    } catch (e) {
+      console.error('Gagal show status bar:', e);
+    }
+    try {
+      await ScreenOrientation.unlock();
+    } catch (e) {
+      console.error('Gagal unlock orientation:', e);
+    }
+    try {
+      await ScreenOrientation.lock({ type: 'portrait' });
+    } catch (e) {
+      console.error('Gagal lock portrait:', e);
+    }
   };
 
   const handleAddScore = (side, points) => {
@@ -584,8 +650,8 @@ export default function RefereeArena({ masterPlayers }) {
     }));
   };
 
-  const playReadySfx = () => playSfx('/buttonReadyKlik.mp3');
-  const playTransitionSfx = () => playSfx('/transisiReady.mp3');
+  const playReadySfx = () => playSfx('/sfx-click.mp3');
+  const playTransitionSfx = () => playSfx('/sfx-transition.mp3');
 
   const handlePlayerReady = (side) => {
     if (!selectedMatch) return;
@@ -1062,18 +1128,21 @@ export default function RefereeArena({ masterPlayers }) {
                 <div className="absolute left-1/2 top-0 bottom-0 w-[2px] bg-gradient-to-b from-transparent via-blue-500 to-transparent -translate-x-1/2 z-0 opacity-50" />
 
                {/* EXIT button */}
-               <button
-                 type="button"
-                 onClick={(e) => {
-                   e.stopPropagation();
-                   setSelectedMatch(null);
-                   setScoreHistory([]);
-                   resetMatch();
-                   setState('selector');
-                   handleFetchMatches(tournamentUrl);
-                 }}
-                 className="absolute top-4 left-1/2 -translate-x-1/2 z-50 px-6 py-2 bg-slate-900/90 rounded-full border border-slate-700 text-xs tracking-widest text-slate-400 hover:text-white"
-               >
+                <button
+                  type="button"
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    await restorePortrait();
+                    setTimeout(() => {
+                      setSelectedMatch(null);
+                      setScoreHistory([]);
+                      resetMatch();
+                      setState('selector');
+                      handleFetchMatches(tournamentUrl);
+                    }, 400);
+                  }}
+                  className="absolute top-4 left-1/2 -translate-x-1/2 z-50 px-6 py-2 bg-slate-900/90 rounded-full border border-slate-700 text-xs tracking-widest text-slate-400 hover:text-white"
+                >
                  EXIT
                </button>
 
@@ -1115,7 +1184,7 @@ export default function RefereeArena({ masterPlayers }) {
                        <div className="w-full max-w-[200px] flex flex-col items-center justify-center my-2">
                           <div className="w-full h-[2px] bg-gradient-to-r from-transparent via-blue-500 to-transparent opacity-70 mb-4"></div>
                           
-                          <span className="text-6xl md:text-8xl font-black italic text-transparent bg-clip-text bg-gradient-to-b from-blue-300 to-blue-600 drop-shadow-[0_0_20px_rgba(59,130,246,0.8)]">
+                          <span className="text-6xl md:text-8xl font-black text-transparent bg-clip-text bg-gradient-to-b from-blue-300 to-blue-600 drop-shadow-[0_0_20px_rgba(59,130,246,0.8)]">
                             {leftScore}
                           </span>
                           
@@ -1156,7 +1225,7 @@ export default function RefereeArena({ masterPlayers }) {
                        <div className="w-full max-w-[200px] flex flex-col items-center justify-center my-2">
                           <div className="w-full h-[2px] bg-gradient-to-r from-transparent via-blue-500 to-transparent opacity-70 mb-4"></div>
                           
-                          <span className="text-6xl md:text-8xl font-black italic text-transparent bg-clip-text bg-gradient-to-b from-blue-300 to-blue-600 drop-shadow-[0_0_20px_rgba(59,130,246,0.8)]">
+                          <span className="text-6xl md:text-8xl font-black text-transparent bg-clip-text bg-gradient-to-b from-blue-300 to-blue-600 drop-shadow-[0_0_20px_rgba(59,130,246,0.8)]">
                             {rightScore}
                           </span>
                           
@@ -1182,7 +1251,7 @@ export default function RefereeArena({ masterPlayers }) {
 
           <MatchIntro
             show={showIntro}
-            audioSrc="/suara-announcer.mp3"
+            audioSrc="/voice-announcer.mp3"
             onFinish={() => {
               setShowIntro(false);
               setHudPhase('SCORE');
@@ -1204,10 +1273,10 @@ export default function RefereeArena({ masterPlayers }) {
 
                     <div className="flex-1 flex flex-col justify-center gap-1.5 w-full max-w-[220px] mx-auto">
                       {[
-                        { key: 'spin', label: 'SPIN FINISH', points: 1, border: 'border-blue-500/50', hover: 'hover:bg-blue-500/20 hover:shadow-[0_0_15px_rgba(59,130,246,0.6)]', point: 'text-blue-400', colorHex: '#3b82f6', audioSrc: '/finish.mp3' },
-                        { key: 'over', label: 'OVER FINISH', points: 2, border: 'border-emerald-500/50', hover: 'hover:bg-emerald-500/20 hover:shadow-[0_0_15px_rgba(16,185,129,0.6)]', point: 'text-emerald-400', colorHex: '#22c55e', audioSrc: '/finish.mp3' },
-                        { key: 'burst', label: 'BURST FINISH', points: 2, border: 'border-fuchsia-500/50', hover: 'hover:bg-fuchsia-500/20 hover:shadow-[0_0_15px_rgba(217,70,239,0.6)]', point: 'text-fuchsia-400', colorHex: '#d946ef', audioSrc: '/finish.mp3' },
-                        { key: 'xtreme', label: 'XTREME FINISH', points: 3, border: 'border-yellow-500/50', hover: 'hover:bg-yellow-500/20 hover:shadow-[0_0_15px_rgba(234,179,8,0.6)]', point: 'text-yellow-400', colorHex: '#eab308', audioSrc: '/finish.mp3' },
+                        { key: 'spin', label: 'SPIN FINISH', points: 1, border: 'border-blue-500/50', hover: 'hover:bg-blue-500/20 hover:shadow-[0_0_15px_rgba(59,130,246,0.6)]', point: 'text-blue-400', colorHex: '#3b82f6', audioSrc: '/sfx-finish.mp3' },
+                        { key: 'over', label: 'OVER FINISH', points: 2, border: 'border-emerald-500/50', hover: 'hover:bg-emerald-500/20 hover:shadow-[0_0_15px_rgba(16,185,129,0.6)]', point: 'text-emerald-400', colorHex: '#22c55e', audioSrc: '/sfx-finish.mp3' },
+                        { key: 'burst', label: 'BURST FINISH', points: 2, border: 'border-fuchsia-500/50', hover: 'hover:bg-fuchsia-500/20 hover:shadow-[0_0_15px_rgba(217,70,239,0.6)]', point: 'text-fuchsia-400', colorHex: '#d946ef', audioSrc: '/sfx-finish.mp3' },
+                        { key: 'xtreme', label: 'XTREME FINISH', points: 3, border: 'border-yellow-500/50', hover: 'hover:bg-yellow-500/20 hover:shadow-[0_0_15px_rgba(234,179,8,0.6)]', point: 'text-yellow-400', colorHex: '#eab308', audioSrc: '/sfx-finish.mp3' },
                       ].map(btn => (
                          <button
                            key={btn.key}
@@ -1279,17 +1348,20 @@ export default function RefereeArena({ masterPlayers }) {
                       </button>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedMatch(null);
-                        setScoreHistory([]);
-                        resetMatch();
-                        setState('selector');
-                        handleFetchMatches(tournamentUrl);
-                      }}
-                      className="mt-2 text-sm text-slate-500 hover:text-slate-300 font-mono tracking-widest uppercase"
-                    >
+                     <button
+                       type="button"
+                       onClick={async () => {
+                         await restorePortrait();
+                         setTimeout(() => {
+                           setSelectedMatch(null);
+                           setScoreHistory([]);
+                           resetMatch();
+                           setState('selector');
+                           handleFetchMatches(tournamentUrl);
+                         }, 400);
+                       }}
+                       className="mt-2 text-sm text-slate-500 hover:text-slate-300 font-mono tracking-widest uppercase"
+                     >
                       ← Back to Matches
                     </button>
                   </div>
@@ -1302,10 +1374,10 @@ export default function RefereeArena({ masterPlayers }) {
 
                     <div className="flex-1 flex flex-col justify-center gap-1.5 w-full max-w-[220px] mx-auto">
                       {[
-                        { key: 'spin', label: 'SPIN FINISH', points: 1, border: 'border-blue-500/50', hover: 'hover:bg-blue-500/20 hover:shadow-[0_0_15px_rgba(59,130,246,0.6)]', point: 'text-blue-400', colorHex: '#3b82f6', audioSrc: '/finish.mp3' },
-                        { key: 'over', label: 'OVER FINISH', points: 2, border: 'border-emerald-500/50', hover: 'hover:bg-emerald-500/20 hover:shadow-[0_0_15px_rgba(16,185,129,0.6)]', point: 'text-emerald-400', colorHex: '#22c55e', audioSrc: '/finish.mp3' },
-                        { key: 'burst', label: 'BURST FINISH', points: 2, border: 'border-fuchsia-500/50', hover: 'hover:bg-fuchsia-500/20 hover:shadow-[0_0_15px_rgba(217,70,239,0.6)]', point: 'text-fuchsia-400', colorHex: '#d946ef', audioSrc: '/finish.mp3' },
-                        { key: 'xtreme', label: 'XTREME FINISH', points: 3, border: 'border-yellow-500/50', hover: 'hover:bg-yellow-500/20 hover:shadow-[0_0_15px_rgba(234,179,8,0.6)]', point: 'text-yellow-400', colorHex: '#eab308', audioSrc: '/finish.mp3' },
+                        { key: 'spin', label: 'SPIN FINISH', points: 1, border: 'border-blue-500/50', hover: 'hover:bg-blue-500/20 hover:shadow-[0_0_15px_rgba(59,130,246,0.6)]', point: 'text-blue-400', colorHex: '#3b82f6', audioSrc: '/sfx-finish.mp3' },
+                        { key: 'over', label: 'OVER FINISH', points: 2, border: 'border-emerald-500/50', hover: 'hover:bg-emerald-500/20 hover:shadow-[0_0_15px_rgba(16,185,129,0.6)]', point: 'text-emerald-400', colorHex: '#22c55e', audioSrc: '/sfx-finish.mp3' },
+                        { key: 'burst', label: 'BURST FINISH', points: 2, border: 'border-fuchsia-500/50', hover: 'hover:bg-fuchsia-500/20 hover:shadow-[0_0_15px_rgba(217,70,239,0.6)]', point: 'text-fuchsia-400', colorHex: '#d946ef', audioSrc: '/sfx-finish.mp3' },
+                        { key: 'xtreme', label: 'XTREME FINISH', points: 3, border: 'border-yellow-500/50', hover: 'hover:bg-yellow-500/20 hover:shadow-[0_0_15px_rgba(234,179,8,0.6)]', point: 'text-yellow-400', colorHex: '#eab308', audioSrc: '/sfx-finish.mp3' },
                       ].map(btn => (
                          <button
                            key={btn.key}
@@ -1510,12 +1582,15 @@ export default function RefereeArena({ masterPlayers }) {
 
               <button
                 type="button"
-                onClick={() => {
-                  setSelectedMatch(null);
-                  setScoreHistory([]);
-                  resetMatch();
-                  setState('selector');
-                  handleFetchMatches(tournamentUrl);
+                onClick={async () => {
+                  await restorePortrait();
+                  setTimeout(() => {
+                    setSelectedMatch(null);
+                    setScoreHistory([]);
+                    resetMatch();
+                    setState('selector');
+                    handleFetchMatches(tournamentUrl);
+                  }, 400);
                 }}
                 className="mt-6 w-full sm:w-auto px-8 py-3 bg-gray-900 border border-red-500/50 text-red-400 font-black text-xs uppercase tracking-widest rounded-2xl active:scale-95 transition-all hover:bg-red-600 hover:text-white hover:border-red-500"
               >

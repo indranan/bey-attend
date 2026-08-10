@@ -1,10 +1,11 @@
 import { useContext, useEffect, useState } from 'react';
 import { AuthContext } from './context/AuthContext';
-import { GoogleLogin } from '@react-oauth/google';
-import { jwtDecode } from 'jwt-decode';
+import GoogleSignInButton from './components/GoogleSignInButton';
+import UserAvatar from './components/UserAvatar';
+import PullToRefresh from 'react-simple-pull-to-refresh';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
-  LogOut, Loader2, MapPin, Trophy, UserCircle, ShieldCheck, Swords, Minimize
+  LogOut, Loader2, MapPin, Trophy, UserCircle, ShieldCheck, Swords, Minimize, BookOpen
 } from 'lucide-react';
 import toast, { Toaster } from 'react-hot-toast';
 import { getFromGas, postToGas, updateBio, uploadProfilePhoto, updatePoints, createTournament } from './utils/api';
@@ -15,11 +16,22 @@ import ParticipantList from './components/ParticipantList';
 import StandingsContent from './components/StandingsContent';
 import AdminContent from './components/AdminContent';
 import ProfileContent from './components/ProfileContent';
+import Rule from './components/Rule';
 import ProfileModal from './components/ProfileModal';
 import RefereeArena from './components/RefereeArena';
 
 export default function App() {
   const { user, login, logout, updateUser } = useContext(AuthContext);
+
+  const isValidUser = Boolean(user && user.sub && user.email);
+
+  useEffect(() => {
+    const root = document.getElementById('root');
+    if (root?.style) {
+      root.style.paddingTop = 'env(safe-area-inset-top)';
+      root.style.paddingBottom = 'env(safe-area-inset-bottom)';
+    }
+  }, []);
 
   const [data, setData] = useState({ event: null, participants: [], count: 0, challongeUrl: '' });
   const [leaderboard, setLeaderboard] = useState([]);
@@ -30,6 +42,7 @@ export default function App() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isUpdatingPoints, setIsUpdatingPoints] = useState(false);
   const [isOnboarding, setIsOnboarding] = useState(false);
+  const [initError, setInitError] = useState(null);
   const [newNickname, setNewNickname] = useState('');
   const [activeTab, setActiveTab] = useState('arena');
   const [showEventModal, setShowEventModal] = useState(false);
@@ -63,29 +76,72 @@ export default function App() {
   };
 
   const refreshEvent = async () => {
-    const res = await getFromGas('getEvent');
-    if (res) setData(res);
+    try {
+      const res = await getFromGas('getEvent');
+      if (res) setData(res);
+    } catch (err) {
+      console.error('Gagal fetch event:', err);
+    }
   };
 
   const refreshLeaderboard = async () => {
-    const res = await getFromGas('getLeaderboard', true);
-    if (res && Array.isArray(res)) setLeaderboard(res);
+    try {
+      const res = await getFromGas('getLeaderboard', true);
+      if (res && Array.isArray(res)) setLeaderboard(res);
+    } catch (err) {
+      console.error('Gagal fetch leaderboard:', err);
+    }
   };
 
   const checkProfile = async () => {
-    const res = await getFromGas(`getBlader&googleId=${user.sub}`);
-    if (res?.registered) {
-      setBlader(res);
-      setIsOnboarding(false);
-    } else {
-      setIsOnboarding(true);
+    try {
+      const res = await getFromGas(`getBlader&googleId=${user.sub}`);
+      if (res?.registered) {
+        setBlader(res);
+        setIsOnboarding(false);
+        if (res.foto) {
+          updateUser({ ...user, picture: res.foto });
+        }
+      } else {
+        setIsOnboarding(true);
+      }
+    } catch (err) {
+      console.error('Gagal fetch profile:', err);
+      throw err;
     }
+  };
+
+  const withTimeout = (promise, ms, label) => {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout: '+label+' (> '+ms+'ms)')), ms))
+    ]);
   };
 
   const initApp = async () => {
     setLoading(true);
-    await Promise.all([checkProfile(), getFromGas('getSettings').then(setSettings), refreshEvent(), refreshLeaderboard()]);
-    setLoading(false);
+    setInitError(null);
+    try {
+      await Promise.all([
+        withTimeout(checkProfile(), 30000, 'checkProfile'),
+        withTimeout(getFromGas('getSettings').then(setSettings), 30000, 'getSettings'),
+        withTimeout(refreshEvent(), 30000, 'refreshEvent'),
+        withTimeout(refreshLeaderboard(), 30000, 'refreshLeaderboard'),
+      ]);
+    } catch (err) {
+      console.error('Gagal inisialisasi app:', err);
+      setInitError('Gagal memuat data. Periksa koneksi internet.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const retryInit = async () => {
+    await initApp();
+  };
+
+  const handleRefresh = async () => {
+    window.location.reload();
   };
 
   useEffect(() => {
@@ -289,14 +345,48 @@ export default function App() {
     );
   }
 
-  if (!user) {
+  if (initError && isValidUser) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-dark-bg p-6 text-center dark:text-white">
+        <div className="w-full max-sm bg-white dark:bg-dark-card p-10 rounded-[2.5rem] shadow-xl border border-gray-100 dark:border-gray-800">
+          <p className="text-red-500 font-black text-sm mb-4">{initError}</p>
+          <button
+            type="button"
+            onClick={retryInit}
+            className="px-6 py-3 bg-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest active:scale-95 transition-all"
+          >
+            Coba Lagi
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isValidUser) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-dark-bg p-6 text-center dark:text-white">
         <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="w-full max-sm bg-white dark:bg-dark-card p-10 rounded-[2.5rem] shadow-xl border border-gray-100 dark:border-gray-800 dark:text-white">
           <Trophy className="text-primary mx-auto mb-4 dark:text-white" size={48} />
           <h1 className="text-3xl font-black text-primary mb-2 italic uppercase tracking-tighter dark:text-white">Lalapan Beyblade X lamongan</h1>
           <p className="text-gray-400 text-[10px] mb-8 font-black uppercase tracking-[0.3em] italic leading-tight dark:text-white">Blader Identity Presence</p>
-          <div className="flex justify-center dark:text-white"><GoogleLogin onSuccess={(res) => login(jwtDecode(res.credential))} theme="filled_blue" shape="pill" /></div>
+          <div className="flex flex-col items-center gap-3">
+            <GoogleSignInButton
+              onLogin={async (userData) => {
+                try {
+                  await login(userData);
+                  toast.success('Login Google berhasil!');
+                } catch (err) {
+                  console.error('Google login error:', err);
+                  const msg = err?.message || '';
+                  if (msg.includes('server_error') || msg.includes('500')) {
+                    toast.error('Login Google gagal: Server error. Pastikan localhost di-whitelist di Google Cloud Console.');
+                  } else {
+                    toast.error('Login Google gagal: ' + msg);
+                  }
+                }
+              }}
+            />
+          </div>
         </motion.div>
       </div>
     );
@@ -332,7 +422,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-dark-bg transition-colors duration-500 pb-28 dark:text-white">
+    <div className="min-h-screen bg-gray-50 dark:bg-dark-bg transition-colors duration-500 pb-28 pt-[max(env(safe-area-inset-top),1.5rem)] dark:text-white overflow-y-auto">
       <CreateEventModal
         show={showEventModal}
         onClose={() => setShowEventModal(false)}
@@ -351,9 +441,9 @@ export default function App() {
       <ProfileModal player={modalProfile} loading={modalLoading} onClose={closeProfile} />
       <Toaster position="top-center" />
 
-      <nav className="w-full max-w-md md:max-w-3xl lg:max-w-5xl mx-auto px-4 flex justify-between items-center sticky top-0 bg-gray-50/80 dark:bg-dark-bg/80 backdrop-blur-lg z-50 dark:text-white">
+      <nav className="w-full max-w-md md:max-w-3xl lg:max-w-5xl mx-auto px-4 flex justify-between items-center sticky top-0 pt-[max(env(safe-area-inset-top),1rem)] bg-gray-50 dark:bg-dark-bg backdrop-blur-lg z-50 dark:text-white">
         <div className="flex items-center gap-3 dark:text-white">
-          <img src={user.picture} referrerPolicy="no-referrer" className="w-11 h-11 rounded-2xl border-2 border-primary object-cover dark:text-white" alt="avatar" />
+          <UserAvatar src={user.picture} name={user.name} className="w-11 h-11 rounded-2xl border-2 border-primary dark:text-white" />
           <div>
             <p className="text-[10px] font-black text-primary leading-none uppercase tracking-widest italic mb-0.5 tracking-tighter dark:text-white">Blader Profile</p>
             <p className="font-black text-sm text-gray-800 dark:text-white italic tracking-tighter truncate w-32">{blader?.nickname}</p>
@@ -374,57 +464,61 @@ export default function App() {
         </div>
       </nav>
 
-      <main className="w-full max-w-md md:max-w-3xl lg:max-w-5xl mx-auto px-4 dark:text-white">
-        {activeTab === 'referee' ? (
-          <RefereeArena key="referee" masterPlayers={leaderboard} />
-        ) : (
-          <AnimatePresence mode="wait">
-            {activeTab === 'arena' ? (
-              <motion.div key="arena" className="space-y-8 dark:text-white">
-                <EventCard
-                  event={data.event}
-                  participants={data.participants}
-                  count={data.count}
-                  user={user}
-                  onAttend={handleAttend}
-                  onCancel={() => setShowCancelModal(true)}
+      <PullToRefresh onRefresh={handleRefresh}>
+        <main className="w-full max-w-md md:max-w-3xl lg:max-w-5xl mx-auto px-4 dark:text-white">
+          {activeTab === 'referee' ? (
+            <RefereeArena key="referee" masterPlayers={leaderboard} />
+          ) : (
+            <AnimatePresence mode="wait">
+              {activeTab === 'arena' ? (
+                <motion.div key="arena" className="space-y-8 dark:text-white">
+                  <EventCard
+                    event={data.event}
+                    participants={data.participants}
+                    count={data.count}
+                    user={user}
+                    onAttend={handleAttend}
+                    onCancel={() => setShowCancelModal(true)}
+                    isSubmitting={isSubmitting}
+                    challongeUrl={data.event?.challongeUrl}
+                  />
+                  {data?.event && <ParticipantList participants={data.participants} onSelect={openProfile} />}
+                </motion.div>
+              ) : activeTab === 'standings' ? (
+                <StandingsContent key="standings" leaderboard={leaderboard} user={user} onSelect={openProfile} />
+              ) : activeTab === 'rule' ? (
+                <Rule key="rule" />
+              ) : activeTab === 'admin' ? (
+                <AdminContent
+                  key="admin"
+                  onCreateEvent={() => setShowEventModal(true)}
+                  onGenerateTournament={handleGenerateTournament}
+                  onUpdatePoints={handleUpdatePoints}
+                  onToggleNickname={handleToggleNickname}
+                  nicknameAllowed={settings.allow_nickname_change === 'true'}
+                  leaderboard={leaderboard}
                   isSubmitting={isSubmitting}
-                  challongeUrl={data.event?.challongeUrl}
+                  isGenerating={isGenerating}
+                  isUpdatingPoints={isUpdatingPoints}
+                  eventId={data?.event?.id}
                 />
-                {data?.event && <ParticipantList participants={data.participants} onSelect={openProfile} />}
-              </motion.div>
-            ) : activeTab === 'standings' ? (
-              <StandingsContent key="standings" leaderboard={leaderboard} user={user} onSelect={openProfile} />
-            ) : activeTab === 'admin' ? (
-              <AdminContent
-                key="admin"
-                onCreateEvent={() => setShowEventModal(true)}
-                onGenerateTournament={handleGenerateTournament}
-                onUpdatePoints={handleUpdatePoints}
-                onToggleNickname={handleToggleNickname}
-                nicknameAllowed={settings.allow_nickname_change === 'true'}
-                leaderboard={leaderboard}
-                isSubmitting={isSubmitting}
-                isGenerating={isGenerating}
-                isUpdatingPoints={isUpdatingPoints}
-                eventId={data?.event?.id}
-              />
-            ) : (
-              <ProfileContent
-                key="profile"
-                blader={blader}
-                user={user}
-                settings={settings}
-                leaderboard={leaderboard}
-                onUpdateNickname={handleUpdateNickname}
-                onUpdateBio={handleUpdateBio}
-                 onUploadPhoto={handleUploadPhoto}
-                isSubmitting={isSubmitting}
-              />
-            )}
-          </AnimatePresence>
-        )}
-      </main>
+              ) : (
+                <ProfileContent
+                  key="profile"
+                  blader={blader}
+                  user={user}
+                  settings={settings}
+                  leaderboard={leaderboard}
+                  onUpdateNickname={handleUpdateNickname}
+                  onUpdateBio={handleUpdateBio}
+                   onUploadPhoto={handleUploadPhoto}
+                  isSubmitting={isSubmitting}
+                />
+              )}
+            </AnimatePresence>
+          )}
+        </main>
+      </PullToRefresh>
 
       <nav className="fixed bottom-6 left-1/2 -translate-x-1/2 w-[92%] max-w-md md:max-w-3xl lg:max-w-5xl bg-white/80 dark:bg-dark-card/80 backdrop-blur-2xl border border-white/20 dark:border-gray-800 rounded-[2.5rem] p-2 shadow-2xl flex justify-between items-center z-50 dark:text-white">
         <button type="button" onClick={() => setActiveTab('arena')} className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${activeTab === 'arena' ? 'bg-primary dark:text-white shadow-lg' : 'text-gray-400'}`}>
@@ -432,6 +526,9 @@ export default function App() {
         </button>
         <button type="button" onClick={() => setActiveTab('standings')} className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${activeTab === 'standings' ? 'bg-primary dark:text-white shadow-lg' : 'text-gray-400'}`}>
           <Trophy size={18} /><span className="text-[8px] font-black uppercase italic tracking-tighter leading-none">Standings</span>
+        </button>
+        <button type="button" onClick={() => setActiveTab('rule')} className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${activeTab === 'rule' ? 'bg-primary dark:text-white shadow-lg' : 'text-gray-400'}`}>
+          <BookOpen size={18} /><span className="text-[8px] font-black uppercase italic tracking-tighter leading-none">Rule</span>
         </button>
         {blader?.role === 'Admin' && (
           <>

@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion';
 import { Trophy } from 'lucide-react';
+import UserAvatar from './UserAvatar';
 
 const StandingsContent = ({ leaderboard, user, onSelect }) => {
   const getStatusIcon = (status) => {
@@ -66,7 +67,7 @@ const StandingsContent = ({ leaderboard, user, onSelect }) => {
                   </td>
                   <td className="px-2 py-3 md:px-4 md:py-4">
                     <div className="flex items-center gap-3">
-                      <img src={item.foto || `https://ui-avatars.com/api/?name=${item.name}`} referrerPolicy="no-referrer" className="w-10 h-10 rounded-xl object-cover border-2 border-gray-800 shadow-md" alt="" />
+                      <UserAvatar src={item.foto} name={item.name} className="w-10 h-10 rounded-xl object-cover border-2 border-gray-800 shadow-md" />
                       <p className={`text-xs font-black text-[15px] tracking-tighter leading-none ${isMe ? 'text-primary' : 'dark:text-white'}`}>{item.name}</p>
                     </div>
                   </td>

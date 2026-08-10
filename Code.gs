@@ -18,8 +18,9 @@ function doGet(e) {
       case 'getBlader': return getBlader(googleId);
       case 'checkNickname': return checkNickname(nickname);
       case 'getEvent': return res(fetchActiveEvent());
-      case 'getSettings': return getSettings();
-      case 'getLeaderboard': return getLeaderboard();
+       case 'getSettings': return getSettings();
+       case 'getRule': return getRule();
+       case 'getLeaderboard': return getLeaderboard();
       case 'getOpenMatches': return getOpenMatches(e.parameter.tournament_url);
       case 'getActiveEvent': return getActiveEvent();
       default: return res({ error: "Endpoint GET tidak ditemukan: " + path });
@@ -50,8 +51,9 @@ function doPost(e) {
       case 'updateBio': return updateBio(data);
       case 'uploadProfilePhoto': return uploadProfilePhoto(data);
       case 'updatePoints': return updatePoints(data);
-      case 'toggleNicknameSetting': return toggleNicknameSetting();
-      case 'submitMatchScore': return submitMatchScore(data);
+       case 'toggleNicknameSetting': return toggleNicknameSetting();
+       case 'saveRule': return saveRule(data);
+       case 'submitMatchScore': return submitMatchScore(data);
       case 'startTournament': return startTournament(data);
       case 'updateSwissRounds': return updateSwissRounds(data);
       case 'createTournament': return createTournament(data);
@@ -500,6 +502,45 @@ function toggleNicknameSetting() {
   const next = current ? "false" : "true";
   sheet.getRange(idx + 1, 2).setValue(next);
   return res({ status: "success", allow_nickname_change: next });
+}
+
+// ============================================
+// ADMIN: GET/SET RULE OF THE MONTH
+// ============================================
+function getRule() {
+  const sheet = SS.getSheetByName("Settings");
+  if (!sheet) return res({});
+  const rows = sheet.getDataRange().getValues();
+  const rule = {};
+  const ruleKeys = ['rule_title', 'rule_image_url', 'rule_warning', 'rule_details'];
+  rows.forEach(r => {
+    if (r[0]) {
+      const key = String(r[0]).toLowerCase();
+      if (ruleKeys.includes(key)) {
+        rule[key] = r[1];
+      }
+    }
+  });
+  return res(rule);
+}
+
+function saveRule(data) {
+  const sheet = SS.getSheetByName("Settings");
+  if (!sheet) return res({ status: "error", message: "Sheet Settings tidak ditemukan" });
+
+  const keys = ['rule_title', 'rule_image_url', 'rule_warning', 'rule_details'];
+  const values = sheet.getDataRange().getValues();
+
+  keys.forEach(key => {
+    const idx = values.findIndex(r => String(r[0]).toLowerCase() === key);
+    if (idx !== -1) {
+      sheet.getRange(idx + 1, 2).setValue(data[key] || '');
+    } else {
+      sheet.appendRow([key, data[key] || '']);
+    }
+  });
+
+  return res({ status: "success", message: "Rule berhasil disimpan" });
 }
 
 // ============================================
