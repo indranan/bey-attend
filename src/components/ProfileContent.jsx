@@ -55,15 +55,13 @@ const ProfileContent = ({ blader, user, settings, leaderboard, onUpdateNickname,
           <div>
             <h2 className="text-2xl font-black italic tracking-tighter dark:text-white">{blader?.nickname}</h2>
             <p className="text-[10px] text-gray-400 font-bold uppercase tracking-[0.2em] mb-4">{blader?.role || 'Blader'}</p>
-            <p //className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Ganti nickname sedang ditutup oleh Admin
-              </p>
-            <button type="button" onClick={() => setIsEditingNick(true)} className="text-[10px] font-black text-primary border-2 border-primary/20 px-6 py-2 rounded-full flex items-center gap-2 mx-auto hover:bg-primary/5 transition-all">
-                <Edit3 size={12} /> GANTI NICKNAME
-              </button>
-            ) : (
-              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Ganti nickname sedang ditutup oleh Admin</p>
-            )}
-              
+{settings?.nicknameAllowed ? (
+          <button type="button" onClick={() => setIsEditingNick(true)} className="text-[10px] font-black text-primary border-2 border-primary/20 px-6 py-2 rounded-full flex items-center gap-2">
+            <Edit3 size={12} /> GANTI NICKNAME
+          </button>
+        ) : (
+          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Ganti nickname sedang ditutup oleh Admin</p>
+        )}
           </div>
         )}
       </div>
