@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const GAS_URL = "https://script.google.com/macros/s/AKfycbw7wTkn6ZTq5AUKvufM4sp6GduhBgsVgRl3gnT4uJW07wQggS3v1N8z4-YRls1lm7k-/exec";
+const GAS_URL = "https://script.google.com/macros/s/AKfycbwA2ei8vZCdSIjtxWV5bzaStfwDjdNSX7VmijIA_Q8h_X6aTkjoWCAo_RtP2uHC3iZGHw/exec";
 
 const AXIOS_TIMEOUT = 15000;
 
@@ -68,6 +68,7 @@ export const getOpenMatches = (tournamentUrl, forceRefresh = false) => {
 };
 export const submitMatchScore = (payload) => postToGas('submitMatchScore', payload);
 export const startTournament = (payload) => postToGas('startTournament', payload);
+export const randomizeParticipants = (payload) => postToGas('randomizeParticipants', payload);
 export const createTournament = (eventId, format, swissRounds) => postToGas('createTournament', {
   eventId,
   format,

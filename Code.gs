@@ -54,8 +54,9 @@ function doPost(e) {
        case 'toggleNicknameSetting': return toggleNicknameSetting();
        case 'saveRule': return saveRule(data);
        case 'submitMatchScore': return submitMatchScore(data);
-      case 'startTournament': return startTournament(data);
-      case 'updateSwissRounds': return updateSwissRounds(data);
+       case 'startTournament': return startTournament(data);
+       case 'randomizeParticipants': return randomizeParticipants(data);
+       case 'updateSwissRounds': return updateSwissRounds(data);
       case 'createTournament': return createTournament(data);
       case 'exportStandings': return exportStandings(data);
       case 'manualSync': return handleManualSync(data);
@@ -1372,6 +1373,82 @@ function startTournament(data) {
   } catch (err) {
     console.error('startTournament error: ' + err.message);
     return res({ status: 'error', message: 'Gagal startTournament: ' + err.message });
+  }
+}
+
+// ============================================
+// CHALLONGE: RANDOMIZE PARTICIPANTS (v2.1)
+// ============================================
+function randomizeParticipants(data) {
+  try {
+    const tournamentUrl = String(data.tournament_url || '');
+    if (!tournamentUrl) {
+      return res({ status: 'error', message: 'tournament_url wajib diisi' });
+    }
+
+    let slug = tournamentUrl.trim();
+    if (slug.indexOf('challonge.com') !== -1) {
+      const clean = slug.replace(/\/+$/, '');
+      const idx = clean.lastIndexOf('/');
+      slug = idx !== -1 ? clean.substring(idx + 1) : clean;
+    }
+
+    let challongeId = '';
+    try {
+      const eventSheet = SS.getSheetByName("Events");
+      const eventValues = eventSheet.getDataRange().getValues();
+      const eventHeaders = eventValues[0];
+      const eventRows = eventValues.slice(1);
+      const urlCol = eventHeaders.findIndex(h => String(h).toLowerCase() === 'challongeurl');
+      const idCol = eventHeaders.findIndex(h => String(h).toLowerCase() === 'challongeid');
+      const norm = (s) => String(s || '').toLowerCase().replace(/[_\s]/g, '');
+      const findCol = (name, fallback) => {
+        const i = eventHeaders.findIndex(h => norm(h) === norm(name));
+        return i >= 0 ? i : fallback;
+      };
+      const uCol = urlCol >= 0 ? urlCol : 6;
+      const iCol = idCol >= 0 ? idCol : 5;
+      for (let i = 0; i < eventRows.length; i++) {
+        const rowUrl = String(eventRows[i][uCol] || '');
+        const rowUrlSlug = rowUrl.indexOf('challonge.com') !== -1
+          ? rowUrl.replace(/\/+$/, '').substring(rowUrl.replace(/\/+$/, '').lastIndexOf('/') + 1)
+          : rowUrl;
+        if (rowUrlSlug === slug || rowUrl === slug) {
+          challongeId = String(eventRows[i][iCol] || '').trim();
+          break;
+        }
+      }
+    } catch (e) {
+      console.error('Gagal baca challonge_id dari sheet: ' + e.message);
+    }
+
+    if (!challongeId) {
+      return res({
+        status: 'error',
+        message: 'challonge_id TIDAK DITEMUKAN di sheet Events untuk slug="' + slug + '".'
+      });
+    }
+
+    const identifier = challongeId;
+
+    const response = challongeFetch('post', '/tournaments/' + identifier + '/participants/randomize.json');
+
+    if (response.__error) {
+      if (response.code === 404) {
+        return res({
+          status: 'error',
+          message: 'Turnamen (id="' + identifier + '") TIDAK DITEMUKAN di akun Challonge (HTTP 404).'
+        });
+      }
+      return res({ status: 'error', message: 'Gagal randomize peserta (HTTP ' + response.code + '): ' + response.text });
+    }
+
+    clearTournamentCache(identifier);
+
+    return res({ status: 'success', tournament: response.data || response });
+  } catch (err) {
+    console.error('randomizeParticipants error: ' + err.message);
+    return res({ status: 'error', message: 'Gagal randomizeParticipants: ' + err.message });
   }
 }
 

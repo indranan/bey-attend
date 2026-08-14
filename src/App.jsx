@@ -8,7 +8,7 @@ import {
   LogOut, Loader2, MapPin, Trophy, UserCircle, ShieldCheck, Swords, Minimize, BookOpen
 } from 'lucide-react';
 import toast, { Toaster } from 'react-hot-toast';
-import { getFromGas, postToGas, updateBio, uploadProfilePhoto, updatePoints, createTournament } from './utils/api';
+import { getFromGas, postToGas, updateBio, uploadProfilePhoto, updatePoints, createTournament, startTournament, randomizeParticipants } from './utils/api';
 import CancelModal from './components/CancelModal';
 import CreateEventModal from './components/CreateEventModal';
 import EventCard from './components/EventCard';
@@ -200,14 +200,42 @@ export default function App() {
     if (!data?.event?.id) return toast.error('Tidak ada event aktif!');
     setIsGenerating(true);
     try {
-      // Mapping UI format -> Challonge type untuk GAS createTournament
       const challongeFormat = format === 'final' ? 'double elimination' : 'swiss';
-      const res = await createTournament(data.event.id, challongeFormat, format === 'weekly' ? Number(swissRounds) || 3 : undefined);
-      if (res?.status === 'success') {
-        toast.success('Bracket turnamen berhasil dibuat!');
-        refreshEvent();
+      const createRes = await createTournament(data.event.id, challongeFormat, format === 'weekly' ? Number(swissRounds) || 3 : undefined);
+
+      if (createRes?.status !== 'success') {
+        toast.error(createRes?.message || 'Gagal generate turnamen');
+        return;
+      }
+
+      const tournamentUrl = createRes.challongeUrl || data.event?.challongeUrl;
+
+      if (format === 'weekly') {
+        const loadingToast = toast.loading('Mengacak urutan pemain dan membuat bracket...');
+        const randomizeRes = await randomizeParticipants({ tournament_url: tournamentUrl });
+        if (randomizeRes?.status !== 'success') {
+          toast.dismiss(loadingToast);
+          toast.error(randomizeRes?.message || 'Gagal mengacak peserta');
+          return;
+        }
+        const startRes = await startTournament({ tournament_url: tournamentUrl });
+        toast.dismiss(loadingToast);
+        if (startRes?.status === 'success') {
+          toast.success('Turnamen Weekly Dimulai!');
+          refreshEvent();
+        } else {
+          toast.error(startRes?.message || 'Gagal memulai turnamen');
+        }
       } else {
-        toast.error(res?.message || 'Gagal generate turnamen');
+        const loadingToast = toast.loading('Membuat bracket Final Double Elim...');
+        const startRes = await startTournament({ tournament_url: tournamentUrl });
+        toast.dismiss(loadingToast);
+        if (startRes?.status === 'success') {
+          toast.success('Turnamen Final Dimulai!');
+          refreshEvent();
+        } else {
+          toast.error(startRes?.message || 'Gagal memulai turnamen');
+        }
       }
     } catch {
       toast.error('Gagal generate turnamen');
@@ -495,7 +523,7 @@ export default function App() {
                   onGenerateTournament={handleGenerateTournament}
                   onUpdatePoints={handleUpdatePoints}
                   onToggleNickname={handleToggleNickname}
-                  nicknameAllowed={settings.allow_nickname_change === 'true'}
+                   nicknameAllowed={settings.allow_nickname_change === true || settings.allow_nickname_change === 'true'}
                   leaderboard={leaderboard}
                   isSubmitting={isSubmitting}
                   isGenerating={isGenerating}

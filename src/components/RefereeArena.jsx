@@ -1105,7 +1105,7 @@ export default function RefereeArena({ masterPlayers }) {
       {/* STATE 2: SCOREBOARD HUD */}
       {state === 'hud' && selectedMatch && (
         <>
-          <div className={`fixed inset-0 z-[999] bg-[#0a0a0a] overflow-hidden flex items-center justify-center ${isFullscreen ? 'w-screen h-screen' : ''}`}>
+          <div className={`fixed inset-0 min-h-[100dvh] z-[999] bg-[#0a0a0a] overflow-y-auto grid place-items-center py-8 ${isFullscreen ? 'w-screen h-screen' : ''}`}>
             <button
               type="button"
               onClick={toggleFullscreen}
@@ -1123,7 +1123,7 @@ export default function RefereeArena({ masterPlayers }) {
           )}
 
            {hudPhase === 'READY' && (
-             <div className="w-full h-full relative overflow-hidden">
+               <div className="w-full max-w-5xl mx-auto relative overflow-y-auto">
                {/* Laser center divider */}
                 <div className="absolute left-1/2 top-0 bottom-0 w-[2px] bg-gradient-to-b from-transparent via-blue-500 to-transparent -translate-x-1/2 z-0 opacity-50" />
 
@@ -1141,7 +1141,7 @@ export default function RefereeArena({ masterPlayers }) {
                       handleFetchMatches(tournamentUrl);
                     }, 400);
                   }}
-                  className="absolute top-4 left-1/2 -translate-x-1/2 z-50 px-6 py-2 bg-slate-900/90 rounded-full border border-slate-700 text-xs tracking-widest text-slate-400 hover:text-white"
+                  className="absolute top-4 left-1/2 -translate-x-1/2 z-50 px-6 py-2 bg-slate-900/90 rounded-full border border-slate-700 text-xs tracking-widest text-slate-400 hover:text-white flex-shrink-0"
                 >
                  EXIT
                </button>
@@ -1163,16 +1163,16 @@ export default function RefereeArena({ masterPlayers }) {
                  ⇆
                </button>
 
-               <div className="flex justify-between items-center w-full h-full">
+                <div className="flex justify-center items-center w-full h-full gap-4 md:gap-6">
                  {/* LEFT COLUMN */}
-                 <motion.div
-                   layout
-                    key={swapped ? "p2-node" : "p1-node"}
-                    transition={{ type: "spring", stiffness: 300, damping: 30 }}
-                    whileTap={{ scale: 0.98 }}
-                     onClick={() => { playReadySfx(); handlePlayerReady(swapped ? 'p2' : 'p1'); }}
-                     className="flex-1 flex flex-col justify-center items-center w-full h-full p-4 md:p-8 z-10 gap-4 md:gap-6 cursor-pointer"
-                   >
+                  <motion.div
+                    layout
+                     key={swapped ? "p2-node" : "p1-node"}
+                     transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                     whileTap={{ scale: 0.98 }}
+                      onClick={() => { playReadySfx(); handlePlayerReady(swapped ? 'p2' : 'p1'); }}
+                      className="flex-1 flex flex-col justify-center items-center w-full h-full p-4 md:p-8 z-10 gap-4 md:gap-6 cursor-pointer flex-shrink-0"
+                    >
                        {(() => { return (
                          <>
                              {/* NAMA PEMAIN - NEON BIRU TANPA KOTAK */}
@@ -1191,29 +1191,29 @@ export default function RefereeArena({ masterPlayers }) {
                           <div className="w-full h-[2px] bg-gradient-to-r from-transparent via-blue-500 to-transparent opacity-70 mt-4"></div>
                        </div>
 
-                       {/* 4. TOMBOL READY */}
-                       <div className="mt-2 w-full max-w-[200px]">
-                         <motion.button
-                           whileHover={{ scale: 1.02 }}
-                           onClick={(e) => { e.stopPropagation(); handlePlayerReady(swapped ? 'p2' : 'p1'); playReadySfx(); }}
-                           className={`w-full py-3 px-4 border font-bold uppercase tracking-widest transition-all rounded ${readyPlayers[swapped ? 'p2' : 'p1'] ? 'border-blue-400 bg-blue-900/60 text-blue-100 font-black shadow-[0_0_20px_rgba(59,130,246,0.7)]' : 'border-slate-600 bg-slate-800/60 text-slate-400 hover:bg-slate-700'}`}
-                         >
-                           {readyPlayers[swapped ? 'p2' : 'p1'] ? 'READY ✓' : 'TAP TO READY'}
-                         </motion.button>
-                       </div>
+                        {/* 4. TOMBOL READY */}
+                        <div className="mt-2 w-full max-w-[200px] flex-shrink-0">
+                          <motion.button
+                            whileHover={{ scale: 1.02 }}
+                            onClick={(e) => { e.stopPropagation(); handlePlayerReady(swapped ? 'p2' : 'p1'); playReadySfx(); }}
+                            className={`w-full py-3 px-4 border font-bold uppercase tracking-widest transition-all rounded ${readyPlayers[swapped ? 'p2' : 'p1'] ? 'border-blue-400 bg-blue-900/60 text-blue-100 font-black shadow-[0_0_20px_rgba(59,130,246,0.7)]' : 'border-slate-600 bg-slate-800/60 text-slate-400 hover:bg-slate-700'}`}
+                          >
+                            {readyPlayers[swapped ? 'p2' : 'p1'] ? 'READY ✓' : 'TAP TO READY'}
+                          </motion.button>
+                        </div>
                      </>
                    ); })()}
                  </motion.div>
 
                  {/* RIGHT COLUMN */}
-                 <motion.div
-                   layout
-                    key={swapped ? "p1-node" : "p2-node"}
-                    transition={{ type: "spring", stiffness: 300, damping: 30 }}
-                    whileTap={{ scale: 0.98 }}
-                     onClick={() => { playReadySfx(); handlePlayerReady(swapped ? 'p1' : 'p2'); }}
-                     className="flex-1 flex flex-col justify-center items-center w-full h-full p-4 md:p-8 z-10 gap-4 md:gap-6 cursor-pointer"
-                   >
+                  <motion.div
+                    layout
+                     key={swapped ? "p1-node" : "p2-node"}
+                     transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                     whileTap={{ scale: 0.98 }}
+                      onClick={() => { playReadySfx(); handlePlayerReady(swapped ? 'p1' : 'p2'); }}
+                      className="flex-1 flex flex-col justify-center items-center w-full h-full p-4 md:p-8 z-10 gap-4 md:gap-6 cursor-pointer flex-shrink-0"
+                    >
                        {(() => { return (
                           <>
                             {/* NAMA PEMAIN - NEON BIRU TANPA KOTAK */}
@@ -1232,16 +1232,16 @@ export default function RefereeArena({ masterPlayers }) {
                           <div className="w-full h-[2px] bg-gradient-to-r from-transparent via-blue-500 to-transparent opacity-70 mt-4"></div>
                        </div>
 
-                       {/* 4. TOMBOL READY */}
-                       <div className="mt-2 w-full max-w-[200px]">
-                         <motion.button
-                           whileHover={{ scale: 1.02 }}
-                           onClick={(e) => { e.stopPropagation(); handlePlayerReady(swapped ? 'p1' : 'p2'); playReadySfx(); }}
-                           className={`w-full py-3 px-4 border font-bold uppercase tracking-widest transition-all rounded ${readyPlayers[swapped ? 'p1' : 'p2'] ? 'border-blue-400 bg-blue-900/60 text-blue-100 font-black shadow-[0_0_20px_rgba(59,130,246,0.7)]' : 'border-slate-600 bg-slate-800/60 text-slate-400 hover:bg-slate-700'}`}
-                         >
-                           {readyPlayers[swapped ? 'p1' : 'p2'] ? 'READY ✓' : 'TAP TO READY'}
-                         </motion.button>
-                       </div>
+                        {/* 4. TOMBOL READY */}
+                        <div className="mt-2 w-full max-w-[200px] flex-shrink-0">
+                          <motion.button
+                            whileHover={{ scale: 1.02 }}
+                            onClick={(e) => { e.stopPropagation(); handlePlayerReady(swapped ? 'p1' : 'p2'); playReadySfx(); }}
+                            className={`w-full py-3 px-4 border font-bold uppercase tracking-widest transition-all rounded ${readyPlayers[swapped ? 'p1' : 'p2'] ? 'border-blue-400 bg-blue-900/60 text-blue-100 font-black shadow-[0_0_20px_rgba(59,130,246,0.7)]' : 'border-slate-600 bg-slate-800/60 text-slate-400 hover:bg-slate-700'}`}
+                          >
+                            {readyPlayers[swapped ? 'p1' : 'p2'] ? 'READY ✓' : 'TAP TO READY'}
+                          </motion.button>
+                        </div>
                      </>
                    ); })()}
                  </motion.div>
@@ -1259,10 +1259,10 @@ export default function RefereeArena({ masterPlayers }) {
           />
 
           {hudPhase === 'SCORE' && (
-            <div className="fixed inset-0 z-[999] bg-slate-950 overflow-hidden flex items-center justify-center">
+             <div className="fixed inset-0 min-h-[100dvh] z-[999] bg-slate-950 overflow-y-auto grid place-items-center py-8">
               <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(30,58,138,0.15)_0%,transparent_70%)]" />
 
-              <div className="relative w-full h-full flex items-stretch justify-center px-2 sm:px-6 py-2 sm:py-4 pb-6 sm:pb-8">
+               <div className="relative w-full max-w-5xl mx-auto flex items-stretch justify-center px-2 sm:px-6 py-2 sm:py-4 pb-6 sm:pb-8">
                 <div className="w-full max-w-7xl grid grid-cols-3 gap-2 sm:gap-6 items-stretch">
 
                   {/* PANEL KIRI - PLAYER 1 */}
@@ -1433,7 +1433,7 @@ export default function RefereeArena({ masterPlayers }) {
                     >
                       <Trophy className="w-8 h-8 lg:w-16 lg:h-16"/>
                     </motion.div>
-                     <p className="truncate max-w-full text-center text-5xl lg:text-8xl font-sans font-bold">{winnerName}</p>
+                     <p className="max-w-full text-center text-5xl lg:text-8xl font-sans font-bold leading-normal pb-2">{winnerName}</p>
                   </div>
                 </div>
 
