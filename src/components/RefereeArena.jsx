@@ -6,6 +6,7 @@ import { getOpenMatches, submitMatchScore, startTournament, getActiveEvent, post
 import { ScreenOrientation } from '@capacitor/screen-orientation';
 import { StatusBar } from '@capacitor/status-bar';
 import MatchIntro from './MatchIntro';
+import PublicNavbar from './PublicNavbar';
 
 const initialState = {
   state: 'selector',
@@ -24,7 +25,7 @@ const initialState = {
   previewScores: null,
 };
 
-export default function RefereeArena({ masterPlayers }) {
+export default function RefereeArena({ masterPlayers, events, externalExcludedPlayerIds, onExcludedPlayersChange }) {
   const [state, setState] = useState(initialState.state);
   const [tournamentUrl, setTournamentUrl] = useState(initialState.tournamentUrl);
   const [participants, setParticipants] = useState(initialState.participants);
@@ -49,10 +50,32 @@ export default function RefereeArena({ masterPlayers }) {
   const [readyPlayers, setReadyPlayers] = useState({ p1: false, p2: false });
   const [scoreEvent, setScoreEvent] = useState(null);
   const [activeOstId, setActiveOstId] = useState(null);
-  const activeOstIdRef = useRef(activeOstId);
-  useEffect(() => { activeOstIdRef.current = activeOstId; }, [activeOstId]);
-  const ostAudioRef = useRef(null);
   const [isScoring, setIsScoring] = useState(false);
+  const ostAudioRef = useRef(null);
+
+  const [isPortrait, setIsPortrait] = useState(false);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [tournamentState, setTournamentState] = useState('');
+  const [completedMatches, setCompletedMatches] = useState([]);
+  const [optionalPoints, setOptionalPoints] = useState({});
+  const [isExporting, setIsExporting] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [showExportConfirm, setShowExportConfirm] = useState(false);
+  const [exportSheetName, setExportSheetName] = useState('');
+  const [excludedPlayerIds, setExcludedPlayerIds] = useState(() => {
+    const initial = new Set();
+    if (Array.isArray(externalExcludedPlayerIds)) {
+      externalExcludedPlayerIds.forEach(id => initial.add(String(id)));
+    }
+    return initial;
+  });
+  const [activeEventName, setActiveEventName] = useState(null);
+  const [activeEventWaktu, setActiveEventWaktu] = useState('');
+  const [activeEventId, setActiveEventId] = useState('');
+  const [isSearching, setIsSearching] = useState(true);
+  const [lastFetchTs, setLastFetchTs] = useState(0);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const LEAGUE_POINTS_DISTRIBUTION = [25, 20, 16, 13, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 1];
 
   const sfxCache = useRef({});
   const sfxList = [
@@ -123,21 +146,6 @@ export default function RefereeArena({ masterPlayers }) {
     }
   }, [masterPlayers]);
 
-  const [isPortrait, setIsPortrait] = useState(false);
-  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
-  const [tournamentState, setTournamentState] = useState('');
-  const [completedMatches, setCompletedMatches] = useState([]);
-  const [optionalPoints, setOptionalPoints] = useState({});
-  const [isExporting, setIsExporting] = useState(false);
-  const [showExportModal, setShowExportModal] = useState(false);
-  const [exportSheetName, setExportSheetName] = useState('');
-  const [activeEventName, setActiveEventName] = useState(null);
-  const [activeEventWaktu, setActiveEventWaktu] = useState('');
-  const [isSearching, setIsSearching] = useState(true);
-  const [lastFetchTs, setLastFetchTs] = useState(0);
-  const [isSyncing, setIsSyncing] = useState(false);
-  const LEAGUE_POINTS_DISTRIBUTION = [25, 20, 16, 13, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 1];
-
   const waitPlayerReadyRef = useRef(null);
 
   useEffect(() => {
@@ -202,27 +210,27 @@ export default function RefereeArena({ masterPlayers }) {
           await ScreenOrientation.lock({ type: 'landscape' });
           console.log('HUD: landscape locked');
         } catch (e) {
-          console.error('HUD: lock landscape gagal', e);
+          console.warn('[HUD STATUSBAR SKIPPED]', e);
         }
 
         try {
           await StatusBar.hide();
           console.log('HUD: status bar hidden');
         } catch (e) {
-          console.error('HUD: hide status bar gagal', e);
+          console.warn('[HUD STATUSBAR SKIPPED]', e);
         }
       } else {
         try {
           await StatusBar.show();
         } catch (e) {
-          console.error('HUD: show status bar gagal', e);
+          console.warn('[HUD STATUSBAR SKIPPED]', e);
         }
 
         try {
           await ScreenOrientation.unlock();
           console.log('HUD: orientation unlocked');
         } catch (e) {
-          console.error('HUD: unlock gagal', e);
+          console.warn('[HUD STATUSBAR SKIPPED]', e);
         }
       }
     };
@@ -231,10 +239,10 @@ export default function RefereeArena({ masterPlayers }) {
 
     return () => {
       ScreenOrientation.unlock().catch((e) =>
-        console.error('HUD cleanup: unlock gagal', e)
+        console.warn('[HUD STATUSBAR SKIPPED]', e)
       );
       StatusBar.show().catch((e) =>
-        console.error('HUD cleanup: show status bar gagal', e)
+        console.warn('[HUD STATUSBAR SKIPPED]', e)
       );
     };
   }, [state]);
@@ -314,15 +322,52 @@ export default function RefereeArena({ masterPlayers }) {
     const loadActiveEvent = async () => {
       setIsSearching(true);
       try {
+        const activeFromProps = (Array.isArray(events) ? events : []).find(e => {
+          const rawStatus = String(e?.status || '').trim();
+          return rawStatus.toLowerCase() === 'aktif';
+        });
+
+        if (activeFromProps) {
+          const challongeUrl = String(activeFromProps.challonge_url || activeFromProps.challongeUrl || '').trim();
+          const eventId = String(activeFromProps.event_id || activeFromProps.id || '').trim();
+          const eventName = String(activeFromProps.nama || '').trim();
+          const waktu = String(activeFromProps.waktu_event || activeFromProps.waktu || '').trim();
+
+          console.log('[REFEREE ACTIVE EVENT SOURCE]', {
+            found: true,
+            eventId,
+            status: activeFromProps.status,
+            tournamentStatus: activeFromProps.tournament_status
+          });
+
+          setActiveEventName(eventName || null);
+          setActiveEventWaktu(waktu);
+          setActiveEventId(eventId);
+          setTournamentUrl(challongeUrl);
+          if (challongeUrl) {
+            await handleFetchMatches(challongeUrl);
+          }
+          return;
+        }
+
         const res = await getActiveEvent();
         if (res?.status === 'success' && res.challongeUrl) {
+          console.log('[REFEREE ACTIVE EVENT SOURCE]', {
+            found: true,
+            eventId: res.event_id,
+            status: res.status,
+            tournamentStatus: res.tournament_status
+          });
           setActiveEventName(res.eventName || null);
           setActiveEventWaktu(res.waktu || '');
+          setActiveEventId(res.event_id || '');
           setTournamentUrl(res.challongeUrl);
           await handleFetchMatches(res.challongeUrl);
         } else {
+          console.log('[REFEREE ACTIVE EVENT SOURCE]', { found: false });
           setActiveEventName(null);
           setActiveEventWaktu('');
+          setActiveEventId('');
         }
       } catch (err) {
         console.error('Gagal load active event:', err);
@@ -332,7 +377,7 @@ export default function RefereeArena({ masterPlayers }) {
       }
     };
     loadActiveEvent();
-  }, []);
+  }, [events]);
 
   const extractTournamentSlug = (input) => {
     const raw = input.trim().replace(/\/+$/, '');
@@ -445,18 +490,52 @@ export default function RefereeArena({ masterPlayers }) {
     setShowExportModal(true);
   };
 
+  const toggleExcludePlayer = (playerId) => {
+    setExcludedPlayerIds(prev => {
+      const next = new Set(prev);
+      if (next.has(playerId)) {
+        next.delete(playerId);
+      } else {
+        next.add(playerId);
+      }
+      if (typeof onExcludedPlayersChange === 'function') {
+        onExcludedPlayersChange(Array.from(next));
+      }
+      return next;
+    });
+  };
+
+  const resetExclusions = () => {
+    setExcludedPlayerIds(new Set());
+    toast.success('Semua participant telah di-include kembali.');
+    if (typeof onExcludedPlayersChange === 'function') {
+      onExcludedPlayersChange([]);
+    }
+  };
+
   const executeExport = async () => {
     if (!exportSheetName.trim()) return;
+    const includedPayload = liveStandings.filter(p => !excludedPlayerIds.has(p.id));
+    if (excludedPlayerIds.size > 0) {
+      setShowExportConfirm(true);
+      return;
+    }
+    await performExport(includedPayload);
+  };
+
+  const performExport = async (payload) => {
     setIsExporting(true);
     try {
       const result = await postToGas('exportStandings', {
         sheetName: exportSheetName.trim(),
-        payload: liveStandings,
+        eventId: activeEventId,
+        payload: payload,
         optionalPoints: optionalPoints,
       });
       if (result?.status === 'success') {
         toast.success(result.message || 'Berhasil rekap ke spreadsheet!');
         setShowExportModal(false);
+        setShowExportConfirm(false);
       } else {
         toast.error(result?.message || 'Gagal export standings');
       }
@@ -491,7 +570,15 @@ export default function RefereeArena({ masterPlayers }) {
   };
 
   const handleSelectMatch = async (match) => {
+    console.log('[MATCH CLICK]', {
+      matchId: match.match_id,
+      player1: match.player1_name,
+      player2: match.player2_name
+    });
     setSelectedMatch(match);
+    console.log('[MATCH SELECTED]', {
+      matchId: match.match_id
+    });
     setScores({ p1: 0, p2: 0 });
     setLaunchFails({ p1: 0, p2: 0 });
     setSwapped(false);
@@ -506,6 +593,9 @@ export default function RefereeArena({ masterPlayers }) {
       ostAudioRef.current.currentTime = 0;
     }
     setTimeout(() => {
+      console.log('[MATCH DETAIL OPEN]', {
+        matchId: match.match_id
+      });
       setState('hud');
     }, 400);
   };
@@ -514,17 +604,17 @@ export default function RefereeArena({ masterPlayers }) {
     try {
       await StatusBar.show();
     } catch (e) {
-      console.error('Gagal show status bar:', e);
+      console.warn('[HUD STATUSBAR SKIPPED]', e);
     }
     try {
       await ScreenOrientation.unlock();
     } catch (e) {
-      console.error('Gagal unlock orientation:', e);
+      console.warn('[HUD STATUSBAR SKIPPED]', e);
     }
     try {
       await ScreenOrientation.lock({ type: 'portrait' });
     } catch (e) {
-      console.error('Gagal lock portrait:', e);
+      console.warn('[HUD STATUSBAR SKIPPED]', e);
     }
   };
 
@@ -558,7 +648,7 @@ export default function RefereeArena({ masterPlayers }) {
       ostAudioRef.current.currentTime = 0;
     }
     setActiveOstId(null);
-    
+
     playSfx(audioSrc);
 
     setScoreEvent({ type: finishType, player, colorHex });
@@ -702,12 +792,12 @@ export default function RefereeArena({ masterPlayers }) {
       setCountdown(c => {
         if (c <= 1) {
           clearInterval(timer);
-             setTimeout(() => {
-               setHudPhase('SCORE');
-               if (waitPlayerReadyRef.current) {
-                 waitPlayerReadyRef.current.pause();
-               }
-             }, 1200);
+          setTimeout(() => {
+            setHudPhase('SCORE');
+            if (waitPlayerReadyRef.current) {
+              waitPlayerReadyRef.current.pause();
+            }
+          }, 1200);
           return 0;
         }
         return c - 1;
@@ -803,12 +893,13 @@ export default function RefereeArena({ masterPlayers }) {
         : null
     : null;
 
-  const getLiveStandings = (participantList, completedMatchList) => {
+  const getLiveStandings = (participantList, completedMatchList, excludedIds = new Set()) => {
     const standingsMap = {};
     (participantList || []).forEach(p => {
       const data = p.participant ? p.participant : p;
       if (data && data.id != null) {
         const idKey = String(data.id);
+        if (excludedIds.has(idKey)) return;
         standingsMap[idKey] = {
           id: idKey,
           name: data.name || data.display_name || 'Unknown',
@@ -867,805 +958,879 @@ export default function RefereeArena({ masterPlayers }) {
     return standings;
   };
 
-  const liveStandings = getLiveStandings(participants, completedMatches);
+  const liveStandings = getLiveStandings(participants, completedMatches, excludedPlayerIds);
 
   return (
-      <div className="select-none min-h-screen bg-transparent text-blue-400 font-mono">
-      {/* STATE 1: MATCH SELECTOR */}
-      {state === 'selector' && (
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-md md:max-w-3xl lg:max-w-5xl mx-auto p-6 md:p-8 space-y-6">
-          <div className="text-center space-y-2">
-            <h2 className="text-3xl md:text-4xl font-black text-white italic tracking-wider uppercase mb-1 drop-shadow-md">REFEREE HUD</h2>
-            <p className="text-[10px] md:text-xs font-bold text-slate-400 tracking-[0.3em] uppercase mb-8">Arena Scoreboard // Challonge Link</p>
-          </div>
-
-          <div className="w-full p-6 md:p-8 rounded-[2rem] bg-slate-800/30 border border-white/5 shadow-sm flex flex-col items-center">
-            {isSearching && (
-              <div className="text-center">
-                <p className="text-sm font-black uppercase tracking-widest text-orange-400 animate-pulse">MENCARI EVENT AKTIF...</p>
-              </div>
-            )}
-            {!isSearching && !activeEventName && (
-              <div className="text-center">
-                <p className="text-sm font-black uppercase tracking-widest text-red-500">TIDAK ADA EVENT AKTIF SAAT INI</p>
-              </div>
-            )}
-            {!isSearching && activeEventName && (
-              <div className="flex flex-col items-center justify-center w-full gap-2">
-                <p className="text-[10px] font-black text-blue-400/60 uppercase tracking-widest">Arena Scoreboard</p>
-                <p className="text-[10px] md:text-xs font-bold text-slate-500 tracking-[0.2em] uppercase">Active Event</p>
-                <p className="text-xl lg:text-2xl font-black text-green-400 drop-shadow-[0_0_10px_rgba(74,222,128,0.4)] tracking-wide uppercase text-center px-4">{activeEventName}</p>
-                {activeEventWaktu && (
-                  <p className="text-xs font-bold text-blue-300/80 tracking-wider uppercase">
-                    {activeEventWaktu}
-                  </p>
-                )}
-                <button
-                  type="button"
-                  onClick={handleSyncMatches}
-                  disabled={isSyncing || loading}
-                  title="Refresh data"
-                  className="flex items-center justify-center gap-2 px-5 py-2 mt-2 rounded-full bg-slate-800/80 border border-slate-600 hover:bg-blue-600 hover:border-blue-400 transition-colors text-xs font-bold text-slate-300 hover:text-white uppercase tracking-widest disabled:opacity-50"
-                >
-                  {isSyncing ? <RefreshCw className="animate-spin" size={16} /> : '🔄 SYNC MATCHES'}
-                </button>
-              </div>
-            )}
-          </div>
-
-          {loading && (
-            <div className="text-center py-8">
-              <Loader2 className="animate-spin text-blue-400 mx-auto mb-3" size={32} />
-              <p className="text-[10px] text-blue-400/60 font-black uppercase tracking-widest">Mengambil data turnamen...</p>
+    <div className="min-h-screen bg-gray-950 text-white">
+      <PublicNavbar />
+      <div className="pt-16">
+        {/* STATE 1: MATCH SELECTOR */}
+        {state === 'selector' && (
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-md md:max-w-3xl lg:max-w-5xl mx-auto p-6 md:p-8 space-y-6">
+            <div className="text-center space-y-2">
+              <h2 className="text-3xl md:text-4xl font-black text-white italic tracking-wider uppercase mb-1 drop-shadow-md">REFEREE HUD</h2>
+              <p className="text-[10px] md:text-xs font-bold text-slate-400 tracking-[0.3em] uppercase mb-8">Arena Scoreboard // Challonge Link</p>
             </div>
-          )}
 
-          {!selectedMatch && (
-            <div className="flex flex-col items-center w-full max-w-2xl mx-auto mt-8">
-              {!loading && (!matches || matches.length === 0) && (!participants || participants.length === 0) && (
-                <div className="mt-8 text-slate-500 text-center border border-slate-800 p-8 rounded-xl w-full">
-                  <p>Belum ada data turnamen. Pastikan ada event berstatus 'aktif' di spreadsheet.</p>
+            <div className="w-full p-6 md:p-8 rounded-[2rem] bg-slate-800/30 border border-white/5 shadow-sm flex flex-col items-center">
+              {isSearching && (
+                <div className="text-center">
+                  <p className="text-sm font-black uppercase tracking-widest text-orange-400 animate-pulse">MENCARI EVENT AKTIF...</p>
                 </div>
               )}
-
-              {tournamentState === 'pending' && !loading && Array.isArray(participants) && participants.length > 0 && (!Array.isArray(matches) || matches.length === 0) && (
-                <div className="mt-8 flex flex-col items-center w-full max-w-2xl mx-auto">
-                  <h3 className="text-xl text-green-400 font-bold mb-4 tracking-widest">PARTICIPANTS (NOT STARTED)</h3>
-                  <div className="grid grid-cols-2 md:grid-cols-3 gap-4 w-full mb-8">
-                    {participants.map((p, index) => (
-                      <div key={index} className="border-2 border-blue-500/50 bg-slate-900/50 p-4 rounded-lg shadow-[0_0_15px_rgba(59,130,246,0.3)] text-center text-white font-semibold">
-                        {p.name || (p.participant && p.participant.name) || "Unknown Player"}
-                      </div>
-                    ))}
-                  </div>
-                  <button
-                    onClick={handleStartTournament}
-                    disabled={isStarting}
-                    className="bg-red-600 hover:bg-red-500 text-white font-black py-4 px-10 rounded-xl shadow-[0_0_20px_rgba(220,38,38,0.8)] text-2xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {isStarting ? 'MENGAKTIFKAN ARENA...' : '🚀 START TOURNAMENT'}
-                  </button>
+              {!isSearching && !activeEventName && (
+                <div className="text-center">
+                  <p className="text-sm font-black uppercase tracking-widest text-red-500">TIDAK ADA EVENT AKTIF SAAT INI</p>
                 </div>
               )}
-
-              {tournamentState === 'underway' && !loading && Array.isArray(matches) && matches.length > 0 && (
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="w-full space-y-3">
-                  <p className="text-[10px] font-black text-blue-400/60 uppercase tracking-widest px-2">Open Matches ({matches.length})</p>
-                  {matches.map((m, idx) => (
-                    <button
-                      key={m.match_id}
-                      type="button"
-                      onClick={() => handleSelectMatch(m)}
-                      className="w-full p-5 md:p-6 rounded-3xl bg-slate-800/30 border border-white/5 hover:border-white/10 hover:bg-slate-700/40 transition-all duration-300 flex flex-col gap-1 cursor-pointer group"
-                    >
-                      <div className="w-full flex flex-col items-center justify-center border-b border-white/5 pb-3 mb-3">
-                        <span className="text-xs lg:text-sm font-black text-blue-400 tracking-widest uppercase mb-1">
-                          {m.round < 0 ? `LOWER BRACKET ${-m.round}` : `ROUND ${m.round}`} • MATCH {m.suggested_play_order ?? idx + 1}
-                        </span>
-                      </div>
-                      <div className="flex flex-col items-center justify-center w-full text-center mt-2">
-                         <p className="text-lg md:text-xl font-sans font-bold text-white group-hover:text-blue-300 transition-colors tracking-tight text-center">{m.player1_name}</p>
-                        <p className="text-xs font-bold italic text-red-500/80 my-1 text-center">VS</p>
-                         <p className="text-lg md:text-xl font-sans font-bold text-white group-hover:text-blue-300 transition-colors tracking-tight text-center">{m.player2_name}</p>
-                      </div>
-                    </button>
-                  ))}
-                </motion.div>
-              )}
-
-              {tournamentState === 'underway' && !loading && Array.isArray(matches) && matches.length === 0 && (
-                <div className="w-full max-w-2xl mx-auto bg-slate-900/50 border border-slate-700 border-dashed rounded-2xl p-8 lg:p-12 flex flex-col items-center justify-center gap-3 mt-4">
-                  <span className="text-4xl lg:text-5xl opacity-50 mb-2">📭</span>
-                  <p className="text-slate-400 font-bold tracking-widest uppercase text-xs lg:text-sm text-center">
-                    No Open Matches Available
-                  </p>
-                  <p className="text-slate-500 text-[10px] lg:text-xs text-center max-w-xs">
-                    API returned empty matches. Please check your Challonge bracket state (are matches pending or waiting to be started?).
-                  </p>
-                </div>
-              )}
-
-              {(tournamentState === 'underway' || tournamentState === 'complete' || tournamentState === 'awaiting_review') && !loading && liveStandings.length > 0 && (
-                <>
-                  <div className="mt-8 w-full max-w-2xl mx-auto">
-                    <h3 className="text-xl text-yellow-400 font-bold mb-4 tracking-widest">KLASEMEN LIGA</h3>
-                  <div className="overflow-x-auto w-full">
-                    <table className="w-full text-sm text-left text-gray-300 border-collapse">
-                      <thead>
-                        <tr className="border-b-2 border-blue-900">
-                          <th className="py-4 px-4 text-[10px] font-black text-blue-400 uppercase tracking-wider text-center">Posisi</th>
-                          <th className="py-4 px-4 text-[10px] font-black text-blue-400 uppercase tracking-wider text-center">Pemain</th>
-                          <th className="py-4 px-4 text-[10px] font-black text-blue-400 uppercase tracking-wider text-center whitespace-nowrap">W - L</th>
-                          <th className="py-4 px-4 text-[10px] font-black text-blue-400 uppercase tracking-wider text-center">Point Finish</th>
-                          <th className="py-4 px-4 text-[10px] font-black text-blue-400 uppercase tracking-wider text-center">Opsional Point</th>
-                          <th className="py-4 px-4 text-[10px] font-black text-blue-400 uppercase tracking-wider text-center">Poin Liga</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {liveStandings.map((p, i) => (
-                          <tr key={p.id} className="border-b border-blue-900 hover:bg-slate-800/50 transition-colors">
-                            <td className="py-3 px-4 text-center">
-                              <span className={`inline-flex items-center justify-center w-8 h-8 rounded-full text-xs font-black ${i === 0 ? 'bg-yellow-400 text-black' : i === 1 ? 'bg-gray-300 text-black' : i === 2 ? 'bg-orange-400 text-black' : 'bg-blue-400/20 text-blue-400'}`}>
-                                {i + 1}
-                              </span>
-                            </td>
-                            <td className="py-3 px-4 text-left">
-                              <div className="flex-1 min-w-[110px] text-left px-2">
-                                <span className="font-black text-blue-300 tracking-tighter text-sm md:text-base whitespace-nowrap block truncate">{p.name}</span>
-                              </div>
-                            </td>
-                            <td className="py-3 px-4 text-center font-mono text-xs font-bold whitespace-nowrap">
-                              {`${p.wins} - ${p.losses}`}
-                            </td>
-                            <td className="py-3 px-4 text-center font-mono text-xs">
-                              {p.pointFinish}
-                            </td>
-                            <td className="py-3 px-4 text-center">
-                              {p.isTied ? (
-                                 <input
-                                   type="number"
-                                   min="0"
-                                   value={optionalPoints[p.id] || ''}
-                                   onChange={(e) => setOptionalPoints(prev => ({ ...prev, [p.id]: parseInt(e.target.value, 10) || 0 }))}
-                                   className="select-text w-16 bg-slate-900 border border-blue-900 rounded px-2 py-1 text-center text-xs text-blue-300 focus:outline-none focus:border-blue-400"
-                                 />
-                              ) : (
-                                <span className="text-slate-600">-</span>
-                              )}
-                            </td>
-                            <td className="py-3 px-4 text-center font-black text-lg text-yellow-400">
-                              {LEAGUE_POINTS_DISTRIBUTION[i] || 0}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                <div className="flex justify-center mt-6 mb-8">
+              {!isSearching && activeEventName && (
+                <div className="flex flex-col items-center justify-center w-full gap-2">
+                  <p className="text-[10px] font-black text-blue-400/60 uppercase tracking-widest">Arena Scoreboard</p>
+                  <p className="text-[10px] md:text-xs font-bold text-slate-500 tracking-[0.2em] uppercase">Active Event</p>
+                  <p className="text-xl lg:text-2xl font-black text-green-400 drop-shadow-[0_0_10px_rgba(74,222,128,0.4)] tracking-wide uppercase text-center px-4">{activeEventName}</p>
+                  {activeEventWaktu && (
+                    <p className="text-xs font-bold text-blue-300/80 tracking-wider uppercase">
+                      {activeEventWaktu}
+                    </p>
+                  )}
                   <button
                     type="button"
-                    onClick={handleOpenExport}
-                    disabled={isExporting}
-                    className="w-full max-w-md py-4 px-6 rounded-xl font-black text-lg tracking-widest border-2 border-green-400 text-green-400 bg-green-400/10 hover:bg-green-400/20 active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    onClick={handleSyncMatches}
+                    disabled={isSyncing || loading}
+                    title="Refresh data"
+                    className="flex items-center justify-center gap-2 px-5 py-2 mt-2 rounded-full bg-slate-800/80 border border-slate-600 hover:bg-blue-600 hover:border-blue-400 transition-colors text-xs font-bold text-slate-300 hover:text-white uppercase tracking-widest disabled:opacity-50"
                   >
-                    {isExporting ? 'MEREKAP...' : '📤 REKAP KE SPREADSHEET'}
+                    {isSyncing ? <RefreshCw className="animate-spin" size={16} /> : '🔄 SYNC MATCHES'}
                   </button>
                 </div>
-                </>
               )}
-
             </div>
-          )}
-        </motion.div>
-      )}
 
-      {showExportModal && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/60 backdrop-blur-sm">
-          <div className="w-full max-w-sm bg-[#1e293b] rounded-[2rem] p-6 shadow-2xl border border-slate-700">
-            <h3 className="text-lg font-black text-white italic uppercase tracking-tighter mb-2">
-              REKAP KE SPREADSHEET
-            </h3>
-            <p className="text-xs text-gray-400 mb-4">
-              Nama Sheet tujuan akan disesuaikan otomatis dengan nama event aktif.
-            </p>
+            {loading && (
+              <div className="text-center py-8">
+                <Loader2 className="animate-spin text-blue-400 mx-auto mb-3" size={32} />
+                <p className="text-[10px] text-blue-400/60 font-black uppercase tracking-widest">Mengambil data turnamen...</p>
+              </div>
+            )}
 
-            <label className="text-[10px] font-black text-blue-500 uppercase ml-2 mb-1 block italic tracking-widest">
-              Nama Target Sheet
-            </label>
-            <input
-              type="text"
-              value={exportSheetName}
-              onChange={(e) => setExportSheetName(e.target.value)}
-              className="select-text w-full bg-slate-800 text-gray-200 rounded-full px-4 py-3 font-bold outline-none border border-slate-600 focus:border-blue-400 transition-all mb-6"
-            />
+            {!selectedMatch && (
+              <div className="flex flex-col items-center w-full max-w-2xl mx-auto mt-8">
+                {!loading && (!matches || matches.length === 0) && (!participants || participants.length === 0) && (
+                  <div className="mt-8 text-slate-500 text-center border border-slate-800 p-8 rounded-xl w-full">
+                    <p>Belum ada data turnamen. Pastikan ada event berstatus 'aktif' di spreadsheet.</p>
+                  </div>
+                )}
 
-            <div className="flex gap-3">
-              <button
-                type="button"
-                onClick={() => setShowExportModal(false)}
-                className="flex-1 py-3 bg-gray-700 text-gray-300 rounded-xl font-sans font-bold uppercase text-xs active:scale-95 transition-all"
-              >
-                Batal
-              </button>
-              <button
-                type="button"
-                onClick={executeExport}
-                disabled={isExporting || !exportSheetName.trim()}
-                className="flex-1 py-3 bg-emerald-600 text-white rounded-xl font-sans font-bold uppercase text-xs shadow-lg shadow-emerald-900/50 active:scale-95 transition-all flex justify-center items-center disabled:opacity-50"
-              >
-                {isExporting ? 'Mengirim...' : 'Rekap Sekarang'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+                {tournamentState === 'pending' && !loading && Array.isArray(participants) && participants.length > 0 && (!Array.isArray(matches) || matches.length === 0) && (
+                  <div className="mt-8 flex flex-col items-center w-full max-w-2xl mx-auto">
+                    <h3 className="text-xl text-green-400 font-bold mb-4 tracking-widest">PARTICIPANTS (NOT STARTED)</h3>
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-4 w-full mb-8">
+                      {participants.map((p, index) => (
+                        <div key={index} className="border-2 border-blue-500/50 bg-slate-900/50 p-4 rounded-lg shadow-[0_0_15px_rgba(59,130,246,0.3)] text-center text-white font-semibold">
+                          {p.name || (p.participant && p.participant.name) || "Unknown Player"}
+                        </div>
+                      ))}
+                    </div>
+                    <button
+                      onClick={handleStartTournament}
+                      disabled={isStarting}
+                      className="bg-red-600 hover:bg-red-500 text-white font-black py-4 px-10 rounded-xl shadow-[0_0_20px_rgba(220,38,38,0.8)] text-2xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {isStarting ? 'MENGAKTIFKAN ARENA...' : '🚀 START TOURNAMENT'}
+                    </button>
+                  </div>
+                )}
 
-      {/* STATE 2: SCOREBOARD HUD */}
-      {state === 'hud' && selectedMatch && (
-        <>
-          <div className={`fixed inset-0 min-h-[100dvh] z-[999] bg-[#0a0a0a] overflow-y-auto grid place-items-center py-8 ${isFullscreen ? 'w-screen h-screen' : ''}`}>
-            <button
-              type="button"
-              onClick={toggleFullscreen}
-              className="absolute top-4 right-4 z-50 p-3 rounded-full bg-slate-900/90 border border-slate-700 text-slate-400 hover:text-white hover:border-blue-500 transition-colors"
-              title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
-            >
-              {isFullscreen ? <Minimize size={20} /> : <Maximize size={20} />}
-            </button>
-          {isPortrait && (
-            <div className="fixed inset-0 z-[1000] bg-black/95 flex flex-col items-center justify-center p-8 text-center">
-              <Smartphone size={64} className="text-yellow-400 mb-4 animate-bounce" />
-              <h2 className="text-2xl font-black text-yellow-400 mb-2">SILAKAN PUTAR HP</h2>
-              <p className="text-sm text-yellow-400/80 font-bold">Putar perangkat Anda ke posisi Landscape (Tidur) untuk memimpin pertandingan</p>
-            </div>
-          )}
+                {tournamentState === 'underway' && !loading && Array.isArray(matches) && matches.length > 0 && (
+                  <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="w-full space-y-3">
+                    <p className="text-[10px] font-black text-blue-400/60 uppercase tracking-widest px-2">Open Matches ({matches.length})</p>
+                    {matches.map((m, idx) => (
+                      <button
+                        key={m.match_id}
+                        type="button"
+                        onClick={() => handleSelectMatch(m)}
+                        className="w-full p-5 md:p-6 rounded-3xl bg-slate-800/30 border border-white/5 hover:border-white/10 hover:bg-slate-700/40 transition-all duration-300 flex flex-col gap-1 cursor-pointer group"
+                      >
+                        <div className="w-full flex flex-col items-center justify-center border-b border-white/5 pb-3 mb-3">
+                          <span className="text-xs lg:text-sm font-black text-blue-400 tracking-widest uppercase mb-1">
+                            {m.round < 0 ? `LOWER BRACKET ${-m.round}` : `ROUND ${m.round}`} • MATCH {m.suggested_play_order ?? idx + 1}
+                          </span>
+                        </div>
+                        <div className="flex flex-col items-center justify-center w-full text-center mt-2">
+                          <p className="text-lg md:text-xl font-sans font-bold text-white group-hover:text-blue-300 transition-colors tracking-tight text-center">{m.player1_name}</p>
+                          <p className="text-xs font-bold italic text-red-500/80 my-1 text-center">VS</p>
+                          <p className="text-lg md:text-xl font-sans font-bold text-white group-hover:text-blue-300 transition-colors tracking-tight text-center">{m.player2_name}</p>
+                        </div>
+                      </button>
+                    ))}
+                  </motion.div>
+                )}
 
-           {hudPhase === 'READY' && (
-               <div className="w-full max-w-5xl mx-auto relative overflow-y-auto">
-               {/* Laser center divider */}
-                <div className="absolute left-1/2 top-0 bottom-0 w-[2px] bg-gradient-to-b from-transparent via-blue-500 to-transparent -translate-x-1/2 z-0 opacity-50" />
+                {tournamentState === 'underway' && !loading && Array.isArray(matches) && matches.length === 0 && (
+                  <div className="w-full max-w-2xl mx-auto bg-slate-900/50 border border-slate-700 border-dashed rounded-2xl p-8 lg:p-12 flex flex-col items-center justify-center gap-3 mt-4">
+                    <span className="text-4xl lg:text-5xl opacity-50 mb-2">📭</span>
+                    <p className="text-slate-400 font-bold tracking-widest uppercase text-xs lg:text-sm text-center">
+                      No Open Matches Available
+                    </p>
+                    <p className="text-slate-500 text-[10px] lg:text-xs text-center max-w-xs">
+                      API returned empty matches. Please check your Challonge bracket state (are matches pending or waiting to be started?).
+                    </p>
+                  </div>
+                )}
 
-               {/* EXIT button */}
+                {(tournamentState === 'underway' || tournamentState === 'complete' || tournamentState === 'awaiting_review') && !loading && liveStandings.length > 0 && (
+                  <>
+                    <div className="mt-8 w-full max-w-2xl mx-auto">
+                      <h3 className="text-xl text-yellow-400 font-bold mb-4 tracking-widest">KLASEMEN LIGA</h3>
+                      <div className="overflow-x-auto w-full">
+                        <table className="w-full text-sm text-left text-gray-300 border-collapse">
+                          <thead>
+                            <tr className="border-b-2 border-blue-900">
+                              <th className="py-4 px-2 text-[10px] font-black text-blue-400 uppercase tracking-wider text-center">Posisi</th>
+                              <th className="py-4 px-2 text-[10px] font-black text-blue-400 uppercase tracking-wider text-center">Pemain</th>
+                              <th className="py-4 px-2 text-[10px] font-black text-blue-400 uppercase tracking-wider text-center whitespace-nowrap">W - L</th>
+                              <th className="py-4 px-2 text-[10px] font-black text-blue-400 uppercase tracking-wider text-center">Point Finish</th>
+                              <th className="py-4 px-2 text-[10px] font-black text-blue-400 uppercase tracking-wider text-center">Opsional Point</th>
+                              <th className="py-4 px-2 text-[10px] font-black text-blue-400 uppercase tracking-wider text-center">Poin Liga</th>
+                              <th className="py-4 px-2 text-[10px] font-black text-blue-400 uppercase tracking-wider text-center">Aksi</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {liveStandings.map((p, i) => (
+                              <tr key={p.id} className="border-b border-blue-900 hover:bg-slate-800/50 transition-colors">
+                                <td className="py-3 px-2 text-center">
+                                  <span className={`inline-flex items-center justify-center w-8 h-8 rounded-full text-xs font-black ${i === 0 ? 'bg-yellow-400 text-black' : i === 1 ? 'bg-gray-300 text-black' : i === 2 ? 'bg-orange-400 text-black' : 'bg-blue-400/20 text-blue-400'}`}>
+                                    {i + 1}
+                                  </span>
+                                </td>
+                                <td className="py-3 px-2 text-left">
+                                  <div className="flex-1 min-w-[110px] text-left px-2">
+                                    <span className="font-black text-blue-300 tracking-tighter text-sm md:text-base whitespace-nowrap block truncate">{p.name}</span>
+                                  </div>
+                                </td>
+                                <td className="py-3 px-2 text-center font-mono text-xs font-bold whitespace-nowrap">
+                                  {`${p.wins} - ${p.losses}`}
+                                </td>
+                                <td className="py-3 px-2 text-center font-mono text-xs">
+                                  {p.pointFinish}
+                                </td>
+                                <td className="py-3 px-2 text-center">
+                                  {p.isTied ? (
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      value={optionalPoints[p.id] || ''}
+                                      onChange={(e) => setOptionalPoints(prev => ({ ...prev, [p.id]: parseInt(e.target.value, 10) || 0 }))}
+                                      className="select-text w-16 bg-slate-900 border border-blue-900 rounded px-2 py-1 text-center text-xs text-blue-300 focus:outline-none focus:border-blue-400"
+                                    />
+                                  ) : (
+                                    <span className="text-slate-600">-</span>
+                                  )}
+                                </td>
+                                <td className="py-3 px-2 text-center font-black text-lg text-yellow-400">
+                                  {i + 1 >= 15 ? 1 : (LEAGUE_POINTS_DISTRIBUTION[i] || 0)}
+                                </td>
+                                <td className="py-3 px-2 text-center">
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleExcludePlayer(p.id)}
+                                    className={`px-2 py-1 rounded-lg text-[9px] font-black uppercase ${excludedPlayerIds.has(p.id)
+                                      ? 'bg-green-500 text-white'
+                                      : 'bg-red-500 text-white'
+                                      }`}
+                                  >
+                                    {excludedPlayerIds.has(p.id) ? 'INCLUDE' : 'EXCLUDE'}
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <div className="flex flex-wrap items-center justify-between gap-3 mt-4">
+                        <div className="flex flex-wrap gap-3 text-[10px] font-black uppercase tracking-widest">
+                          <span className="text-blue-400">PARTICIPANTS: {participants.length}</span>
+                          <span className="text-green-400">INCLUDED: {liveStandings.length}</span>
+                          <span className="text-red-400">EXCLUDED: {excludedPlayerIds.size}</span>
+                        </div>
+                        {excludedPlayerIds.size > 0 && (
+                          <button
+                            type="button"
+                            onClick={resetExclusions}
+                            className="px-3 py-1 bg-gray-600 text-white rounded-lg text-[9px] font-black uppercase hover:bg-gray-500 transition-colors"
+                          >
+                            RESET EXCLUSIONS
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex justify-center mt-6 mb-8">
+                      <button
+                        type="button"
+                        onClick={handleOpenExport}
+                        disabled={isExporting}
+                        className="w-full max-w-md py-4 px-6 rounded-xl font-black text-lg tracking-widest border-2 border-green-400 text-green-400 bg-green-400/10 hover:bg-green-400/20 active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {isExporting ? 'MEREKAP...' : '📤 REKAP KE SPREADSHEET'}
+                      </button>
+                    </div>
+                  </>
+                )}
+
+              </div>
+            )}
+          </motion.div>
+        )}
+
+        {showExportModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/60 backdrop-blur-sm">
+            <div className="w-full max-w-sm bg-[#1e293b] rounded-[2rem] p-6 shadow-2xl border border-slate-700">
+              <h3 className="text-lg font-black text-white italic uppercase tracking-tighter mb-2">
+                REKAP KE SPREADSHEET
+              </h3>
+              <p className="text-xs text-gray-400 mb-4">
+                Nama Sheet tujuan akan disesuaikan otomatis dengan nama event aktif.
+              </p>
+
+              <label className="text-[10px] font-black text-blue-500 uppercase ml-2 mb-1 block italic tracking-widest">
+                Nama Target Sheet
+              </label>
+              <input
+                type="text"
+                value={exportSheetName}
+                onChange={(e) => setExportSheetName(e.target.value)}
+                className="select-text w-full bg-slate-800 text-gray-200 rounded-full px-4 py-3 font-bold outline-none border border-slate-600 focus:border-blue-400 transition-all mb-6"
+              />
+
+              <div className="flex gap-3">
                 <button
                   type="button"
-                  onClick={async (e) => {
-                    e.stopPropagation();
-                    await restorePortrait();
-                    setTimeout(() => {
-                      setSelectedMatch(null);
-                      setScoreHistory([]);
-                      resetMatch();
-                      setState('selector');
-                      handleFetchMatches(tournamentUrl);
-                    }, 400);
-                  }}
-                  className="absolute top-4 left-1/2 -translate-x-1/2 z-50 px-6 py-2 bg-slate-900/90 rounded-full border border-slate-700 text-xs tracking-widest text-slate-400 hover:text-white flex-shrink-0"
+                  onClick={() => setShowExportModal(false)}
+                  className="flex-1 py-3 bg-gray-700 text-gray-300 rounded-xl font-sans font-bold uppercase text-xs active:scale-95 transition-all"
                 >
-                 EXIT
-               </button>
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={executeExport}
+                  disabled={isExporting || !exportSheetName.trim()}
+                  className="flex-1 py-3 bg-emerald-600 text-white rounded-xl font-sans font-bold uppercase text-xs shadow-lg shadow-emerald-900/50 active:scale-95 transition-all flex justify-center items-center disabled:opacity-50"
+                >
+                  {isExporting ? 'Mengirim...' : 'Rekap Sekarang'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
-               {/* VS badge */}
-               <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20">
-                 <span className="text-3xl md:text-5xl font-black italic text-slate-300 drop-shadow-[0_5px_5px_rgba(0,0,0,1)]">VS</span>
-               </div>
+        {showExportConfirm && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/60 backdrop-blur-sm">
+            <div className="w-full max-w-sm bg-[#1e293b] rounded-[2rem] p-6 shadow-2xl border border-slate-700">
+              <h3 className="text-lg font-black text-white italic uppercase tracking-tighter mb-2">
+                KONFIRMASI EXPORT
+              </h3>
+              <p className="text-xs text-gray-400 mb-4">
+                {excludedPlayerIds.size} player dikecualikan dari hasil resmi tournament.
+              </p>
+              <p className="text-xs text-yellow-400 mb-6">
+                Player yang dikecualikan tidak akan mendapatkan League Point dan tidak masuk Leaderboard Sync.
+              </p>
 
-               {/* SWAP button bottom-center */}
-               <button
-                 type="button"
-                 onClick={(e) => {
-                   e.stopPropagation();
-                   setSwapped(prev => !prev);
-                 }}
-                 className="absolute bottom-10 left-1/2 -translate-x-1/2 z-50 rounded-full bg-slate-900 border border-slate-700 p-3 hover:border-blue-400 hover:text-blue-400 text-slate-400 transition-colors"
-               >
-                 ⇆
-               </button>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowExportConfirm(false)}
+                  className="flex-1 py-3 bg-gray-700 text-gray-300 rounded-xl font-sans font-bold uppercase text-xs active:scale-95 transition-all"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const includedPayload = liveStandings.filter(p => !excludedPlayerIds.has(p.id));
+                    performExport(includedPayload);
+                  }}
+                  disabled={isExporting}
+                  className="flex-1 py-3 bg-emerald-600 text-white rounded-xl font-sans font-bold uppercase text-xs shadow-lg shadow-emerald-900/50 active:scale-95 transition-all flex justify-center items-center disabled:opacity-50"
+                >
+                  {isExporting ? 'Mengirim...' : 'EXPORT RESULTS'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
-                <div className="flex justify-center items-center w-full h-full gap-4 md:gap-6">
-                 {/* LEFT COLUMN */}
-                  <motion.div
-                    layout
-                     key={swapped ? "p2-node" : "p1-node"}
-                     transition={{ type: "spring", stiffness: 300, damping: 30 }}
-                     whileTap={{ scale: 0.98 }}
+        {/* STATE 2: SCOREBOARD HUD */}
+        {state === 'hud' && selectedMatch && (
+          <>
+            <div className={`fixed inset-0 min-h-[100dvh] z-[999] bg-[#0a0a0a] overflow-y-auto grid place-items-center py-8 ${isFullscreen ? 'w-screen h-screen' : ''}`}>
+              <button
+                type="button"
+                onClick={toggleFullscreen}
+                className="absolute top-4 right-4 z-50 p-3 rounded-full bg-slate-900/90 border border-slate-700 text-slate-400 hover:text-white hover:border-blue-500 transition-colors"
+                title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+              >
+                {isFullscreen ? <Minimize size={20} /> : <Maximize size={20} />}
+              </button>
+              {isPortrait && (
+                <div className="fixed inset-0 z-[1000] bg-black/95 flex flex-col items-center justify-center p-8 text-center">
+                  <Smartphone size={64} className="text-yellow-400 mb-4 animate-bounce" />
+                  <h2 className="text-2xl font-black text-yellow-400 mb-2">SILAKAN PUTAR HP</h2>
+                  <p className="text-sm text-yellow-400/80 font-bold">Putar perangkat Anda ke posisi Landscape (Tidur) untuk memimpin pertandingan</p>
+                </div>
+              )}
+
+              {hudPhase === 'READY' && (
+                <div className="w-full max-w-5xl mx-auto relative overflow-y-auto">
+                  {/* Laser center divider */}
+                  <div className="absolute left-1/2 top-0 bottom-0 w-[2px] bg-gradient-to-b from-transparent via-blue-500 to-transparent -translate-x-1/2 z-0 opacity-50" />
+
+                  {/* EXIT button */}
+                  <button
+                    type="button"
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      await restorePortrait();
+                      setTimeout(() => {
+                        setSelectedMatch(null);
+                        setScoreHistory([]);
+                        resetMatch();
+                        setState('selector');
+                        handleFetchMatches(tournamentUrl);
+                      }, 400);
+                    }}
+                    className="absolute top-4 left-1/2 -translate-x-1/2 z-50 px-6 py-2 bg-slate-900/90 rounded-full border border-slate-700 text-xs tracking-widest text-slate-400 hover:text-white flex-shrink-0"
+                  >
+                    EXIT
+                  </button>
+
+                  {/* VS badge */}
+                  <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20">
+                    <span className="text-3xl md:text-5xl font-black italic text-slate-300 drop-shadow-[0_5px_5px_rgba(0,0,0,1)]">VS</span>
+                  </div>
+
+                  {/* SWAP button bottom-center */}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSwapped(prev => !prev);
+                    }}
+                    className="absolute bottom-10 left-1/2 -translate-x-1/2 z-50 rounded-full bg-slate-900 border border-slate-700 p-3 hover:border-blue-400 hover:text-blue-400 text-slate-400 transition-colors"
+                  >
+                    ⇆
+                  </button>
+
+                  <div className="flex justify-center items-center w-full h-full gap-4 md:gap-6">
+                    {/* LEFT COLUMN */}
+                    <motion.div
+                      layout
+                      key={swapped ? "p2-node" : "p1-node"}
+                      transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                      whileTap={{ scale: 0.98 }}
                       onClick={() => { playReadySfx(); handlePlayerReady(swapped ? 'p2' : 'p1'); }}
                       className="flex-1 flex flex-col justify-center items-center w-full h-full p-4 md:p-8 z-10 gap-4 md:gap-6 cursor-pointer flex-shrink-0"
                     >
-                       {(() => { return (
-                         <>
-                             {/* NAMA PEMAIN - NEON BIRU TANPA KOTAK */}
-                             <h3 className="text-2xl sm:text-3xl md:text-4xl font-sans font-bold uppercase text-yellow-500 drop-shadow-[0_0_12px_rgba(234,179,8,0.6)] text-center px-2 whitespace-nowrap overflow-hidden text-ellipsis w-full my-4 md:my-6 z-10">
-                               {swapped ? (selectedMatch?.player2_name || '?') : (selectedMatch?.player1_name || '?')}
-                             </h3>
+                      {(() => {
+                        return (
+                          <>
+                            {/* NAMA PEMAIN - NEON BIRU TANPA KOTAK */}
+                            <h3 className="text-2xl sm:text-3xl md:text-4xl font-sans font-bold uppercase text-yellow-500 drop-shadow-[0_0_12px_rgba(234,179,8,0.6)] text-center px-2 whitespace-nowrap overflow-hidden text-ellipsis w-full my-4 md:my-6 z-10">
+                              {swapped ? (selectedMatch?.player2_name || '?') : (selectedMatch?.player1_name || '?')}
+                            </h3>
 
-                         {/* 3. AREA SKOR DENGAN GARIS NEON */}
-                       <div className="w-full max-w-[200px] flex flex-col items-center justify-center my-2">
-                          <div className="w-full h-[2px] bg-gradient-to-r from-transparent via-blue-500 to-transparent opacity-70 mb-4"></div>
-                          
-                          <span className="text-6xl md:text-8xl font-black text-transparent bg-clip-text bg-gradient-to-b from-blue-300 to-blue-600 drop-shadow-[0_0_20px_rgba(59,130,246,0.8)]">
-                            {leftScore}
-                          </span>
-                          
-                          <div className="w-full h-[2px] bg-gradient-to-r from-transparent via-blue-500 to-transparent opacity-70 mt-4"></div>
-                       </div>
+                            {/* 3. AREA SKOR DENGAN GARIS NEON */}
+                            <div className="w-full max-w-[200px] flex flex-col items-center justify-center my-2">
+                              <div className="w-full h-[2px] bg-gradient-to-r from-transparent via-blue-500 to-transparent opacity-70 mb-4"></div>
 
-                        {/* 4. TOMBOL READY */}
-                        <div className="mt-2 w-full max-w-[200px] flex-shrink-0">
-                          <motion.button
-                            whileHover={{ scale: 1.02 }}
-                            onClick={(e) => { e.stopPropagation(); handlePlayerReady(swapped ? 'p2' : 'p1'); playReadySfx(); }}
-                            className={`w-full py-3 px-4 border font-bold uppercase tracking-widest transition-all rounded ${readyPlayers[swapped ? 'p2' : 'p1'] ? 'border-blue-400 bg-blue-900/60 text-blue-100 font-black shadow-[0_0_20px_rgba(59,130,246,0.7)]' : 'border-slate-600 bg-slate-800/60 text-slate-400 hover:bg-slate-700'}`}
-                          >
-                            {readyPlayers[swapped ? 'p2' : 'p1'] ? 'READY ✓' : 'TAP TO READY'}
-                          </motion.button>
-                        </div>
-                     </>
-                   ); })()}
-                 </motion.div>
+                              <span className="text-6xl md:text-8xl font-black text-transparent bg-clip-text bg-gradient-to-b from-blue-300 to-blue-600 drop-shadow-[0_0_20px_rgba(59,130,246,0.8)]">
+                                {leftScore}
+                              </span>
 
-                 {/* RIGHT COLUMN */}
-                  <motion.div
-                    layout
-                     key={swapped ? "p1-node" : "p2-node"}
-                     transition={{ type: "spring", stiffness: 300, damping: 30 }}
-                     whileTap={{ scale: 0.98 }}
+                              <div className="w-full h-[2px] bg-gradient-to-r from-transparent via-blue-500 to-transparent opacity-70 mt-4"></div>
+                            </div>
+
+                            {/* 4. TOMBOL READY */}
+                            <div className="mt-2 w-full max-w-[200px] flex-shrink-0">
+                              <motion.button
+                                whileHover={{ scale: 1.02 }}
+                                onClick={(e) => { e.stopPropagation(); handlePlayerReady(swapped ? 'p2' : 'p1'); playReadySfx(); }}
+                                className={`w-full py-3 px-4 border font-bold uppercase tracking-widest transition-all rounded ${readyPlayers[swapped ? 'p2' : 'p1'] ? 'border-blue-400 bg-blue-900/60 text-blue-100 font-black shadow-[0_0_20px_rgba(59,130,246,0.7)]' : 'border-slate-600 bg-slate-800/60 text-slate-400 hover:bg-slate-700'}`}
+                              >
+                                {readyPlayers[swapped ? 'p2' : 'p1'] ? 'READY ✓' : 'TAP TO READY'}
+                              </motion.button>
+                            </div>
+                          </>
+                        );
+                      })()}
+                    </motion.div>
+
+                    {/* RIGHT COLUMN */}
+                    <motion.div
+                      layout
+                      key={swapped ? "p1-node" : "p2-node"}
+                      transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                      whileTap={{ scale: 0.98 }}
                       onClick={() => { playReadySfx(); handlePlayerReady(swapped ? 'p1' : 'p2'); }}
                       className="flex-1 flex flex-col justify-center items-center w-full h-full p-4 md:p-8 z-10 gap-4 md:gap-6 cursor-pointer flex-shrink-0"
                     >
-                       {(() => { return (
+                      {(() => {
+                        return (
                           <>
                             {/* NAMA PEMAIN - NEON BIRU TANPA KOTAK */}
                             <h3 className="text-2xl sm:text-3xl md:text-4xl font-sans font-bold uppercase text-yellow-500 drop-shadow-[0_0_12px_rgba(234,179,8,0.6)] text-center px-2 whitespace-nowrap overflow-hidden text-ellipsis w-full my-4 md:my-6 z-10">
                               {swapped ? (selectedMatch?.player1_name || '?') : (selectedMatch?.player2_name || '?')}
                             </h3>
 
-                         {/* 3. AREA SKOR DENGAN GARIS NEON */}
-                       <div className="w-full max-w-[200px] flex flex-col items-center justify-center my-2">
-                          <div className="w-full h-[2px] bg-gradient-to-r from-transparent via-blue-500 to-transparent opacity-70 mb-4"></div>
-                          
-                          <span className="text-6xl md:text-8xl font-black text-transparent bg-clip-text bg-gradient-to-b from-blue-300 to-blue-600 drop-shadow-[0_0_20px_rgba(59,130,246,0.8)]">
-                            {rightScore}
-                          </span>
-                          
-                          <div className="w-full h-[2px] bg-gradient-to-r from-transparent via-blue-500 to-transparent opacity-70 mt-4"></div>
-                       </div>
+                            {/* 3. AREA SKOR DENGAN GARIS NEON */}
+                            <div className="w-full max-w-[200px] flex flex-col items-center justify-center my-2">
+                              <div className="w-full h-[2px] bg-gradient-to-r from-transparent via-blue-500 to-transparent opacity-70 mb-4"></div>
 
-                        {/* 4. TOMBOL READY */}
-                        <div className="mt-2 w-full max-w-[200px] flex-shrink-0">
-                          <motion.button
-                            whileHover={{ scale: 1.02 }}
-                            onClick={(e) => { e.stopPropagation(); handlePlayerReady(swapped ? 'p1' : 'p2'); playReadySfx(); }}
-                            className={`w-full py-3 px-4 border font-bold uppercase tracking-widest transition-all rounded ${readyPlayers[swapped ? 'p1' : 'p2'] ? 'border-blue-400 bg-blue-900/60 text-blue-100 font-black shadow-[0_0_20px_rgba(59,130,246,0.7)]' : 'border-slate-600 bg-slate-800/60 text-slate-400 hover:bg-slate-700'}`}
+                              <span className="text-6xl md:text-8xl font-black text-transparent bg-clip-text bg-gradient-to-b from-blue-300 to-blue-600 drop-shadow-[0_0_20px_rgba(59,130,246,0.8)]">
+                                {rightScore}
+                              </span>
+
+                              <div className="w-full h-[2px] bg-gradient-to-r from-transparent via-blue-500 to-transparent opacity-70 mt-4"></div>
+                            </div>
+
+                            {/* 4. TOMBOL READY */}
+                            <div className="mt-2 w-full max-w-[200px] flex-shrink-0">
+                              <motion.button
+                                whileHover={{ scale: 1.02 }}
+                                onClick={(e) => { e.stopPropagation(); handlePlayerReady(swapped ? 'p1' : 'p2'); playReadySfx(); }}
+                                className={`w-full py-3 px-4 border font-bold uppercase tracking-widest transition-all rounded ${readyPlayers[swapped ? 'p1' : 'p2'] ? 'border-blue-400 bg-blue-900/60 text-blue-100 font-black shadow-[0_0_20px_rgba(59,130,246,0.7)]' : 'border-slate-600 bg-slate-800/60 text-slate-400 hover:bg-slate-700'}`}
+                              >
+                                {readyPlayers[swapped ? 'p1' : 'p2'] ? 'READY ✓' : 'TAP TO READY'}
+                              </motion.button>
+                            </div>
+                          </>
+                        );
+                      })()}
+                    </motion.div>
+                  </div>
+                </div>
+              )}
+
+              <MatchIntro
+                show={showIntro}
+                audioSrc="/voice-announcer.mp3"
+                onFinish={() => {
+                  setShowIntro(false);
+                  setHudPhase('SCORE');
+                }}
+              />
+
+              {hudPhase === 'SCORE' && (
+                <div className="fixed inset-0 min-h-[100dvh] z-[999] bg-slate-950 overflow-y-auto grid place-items-center py-8">
+                  <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(30,58,138,0.15)_0%,transparent_70%)]" />
+
+                  <div className="relative w-full max-w-5xl mx-auto flex items-stretch justify-center px-2 sm:px-6 py-2 sm:py-4 pb-6 sm:pb-8">
+                    <div className="w-full max-w-7xl grid grid-cols-3 gap-2 sm:gap-6 items-stretch">
+
+                      {/* PANEL KIRI - PLAYER 1 */}
+                      <div className="flex flex-col items-center gap-2">
+                        <div className="w-full border-t-2 border-b-2 border-blue-500 bg-blue-900/20 py-1.5 text-center">
+                          <h2 className="text-lg sm:text-xl md:text-2xl font-black uppercase text-yellow-400 tracking-wider text-center px-2 w-full whitespace-nowrap overflow-visible" title={leftPlayer.name}>{swapped ? (selectedMatch?.player2_name || '?') : (selectedMatch?.player1_name || '?')}</h2>
+                        </div>
+
+                        <div className="flex-1 flex flex-col justify-center gap-1.5 w-full max-w-[220px] mx-auto">
+                          {[
+                            { key: 'spin', label: 'SPIN FINISH', points: 1, border: 'border-blue-500/50', hover: 'hover:bg-blue-500/20 hover:shadow-[0_0_15px_rgba(59,130,246,0.6)]', point: 'text-blue-400', colorHex: '#3b82f6', audioSrc: '/sfx-finish.mp3' },
+                            { key: 'over', label: 'OVER FINISH', points: 2, border: 'border-emerald-500/50', hover: 'hover:bg-emerald-500/20 hover:shadow-[0_0_15px_rgba(16,185,129,0.6)]', point: 'text-emerald-400', colorHex: '#22c55e', audioSrc: '/sfx-finish.mp3' },
+                            { key: 'burst', label: 'BURST FINISH', points: 2, border: 'border-fuchsia-500/50', hover: 'hover:bg-fuchsia-500/20 hover:shadow-[0_0_15px_rgba(217,70,239,0.6)]', point: 'text-fuchsia-400', colorHex: '#d946ef', audioSrc: '/sfx-finish.mp3' },
+                            { key: 'xtreme', label: 'XTREME FINISH', points: 3, border: 'border-yellow-500/50', hover: 'hover:bg-yellow-500/20 hover:shadow-[0_0_15px_rgba(234,179,8,0.6)]', point: 'text-yellow-400', colorHex: '#eab308', audioSrc: '/sfx-finish.mp3' },
+                          ].map(btn => (
+                            <button
+                              key={btn.key}
+                              type="button"
+                              onClick={() => triggerScoreAnimation(1, btn.label, btn.points, btn.colorHex, btn.audioSrc, swapped ? 'p2' : 'p1')}
+                              disabled={isScoring}
+                              className={`w-full flex items-center justify-between px-3 sm:px-4 py-2 sm:py-3 bg-black/60 border text-blue-300 font-semibold text-base sm:text-lg uppercase tracking-wider rounded-none active:scale-95 transition-all ${btn.border} ${btn.hover} ${isScoring ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            >
+                              <span>{btn.label}</span>
+                              <span className={`${btn.point} text-xl sm:text-2xl font-bold`}>+{btn.points}</span>
+                            </button>
+                          ))}
+                        </div>
+
+                        <div className="flex items-center gap-2 mt-2">
+                          {[0, 1].map(i => (
+                            <div key={i} className={`w-4 h-4 rounded-full border ${i < leftFails ? 'bg-red-600 border-red-500 shadow-[0_0_8px_rgba(220,38,38,0.6)]' : 'border-blue-700'}`} />
+                          ))}
+                          <button
+                            type="button"
+                            onClick={() => handleLaunchFail(leftSlot, leftPlayer.name)}
+                            className="px-3 py-1 bg-red-900/30 border border-red-700 text-red-400 text-xs font-black uppercase tracking-widest rounded-none hover:bg-red-600/30 active:scale-95 transition-all"
                           >
-                            {readyPlayers[swapped ? 'p1' : 'p2'] ? 'READY ✓' : 'TAP TO READY'}
+                            FAIL
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* PANEL TENGAH */}
+                      <div className="flex flex-col items-center justify-center gap-2 sm:gap-3">
+                        <div className="w-full border-x-4 border-blue-500 bg-blue-900/10 px-3 sm:px-6 py-1.5 text-center">
+                          <p className="text-[10px] sm:text-xs font-black text-blue-400 uppercase tracking-[0.3em]">Babak {selectedMatch?.round ?? 1}</p>
+                          <div className="flex items-center justify-center gap-3 mt-1">
+                            <button
+                              onClick={() => setRaceToTarget(prev => Math.max(4, prev - 1))}
+                              className="w-6 h-6 flex items-center justify-center rounded-full bg-slate-800 text-slate-400 hover:text-white"
+                            > - </button>
+                            <span className="text-xs font-bold tracking-widest text-slate-400 uppercase">
+                              RACE TO {raceToTarget}
+                            </span>
+                            <button
+                              onClick={() => setRaceToTarget(prev => prev + 1)}
+                              className="w-6 h-6 flex items-center justify-center rounded-full bg-slate-800 text-slate-400 hover:text-white"
+                            > + </button>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-center gap-2 sm:gap-4">
+                          <span className="text-5xl sm:text-8xl md:text-9xl font-black text-blue-400 drop-shadow-[0_0_20px_rgba(59,130,246,0.8)] leading-none">{leftScore}</span>
+                          <span className="text-2xl sm:text-4xl font-black text-blue-400/40">:</span>
+                          <span className="text-5xl sm:text-8xl md:text-9xl font-black text-blue-400 drop-shadow-[0_0_20px_rgba(59,130,246,0.8)] leading-none">{rightScore}</span>
+                        </div>
+
+                        <div className="flex gap-4 w-full mt-6">
+                          <button
+                            type="button"
+                            onClick={handleUndo}
+                            disabled={scoreHistory.length === 0}
+                            className="flex-1 py-3 border border-orange-500 text-orange-500 font-bold uppercase tracking-widest hover:bg-orange-500/20 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            UNDO
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleRelaunch}
+                            className="flex-1 py-3 border border-gray-400 text-gray-400 font-bold uppercase tracking-widest hover:bg-gray-400/20 transition"
+                          >
+                            RELAUNCH
+                          </button>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            await restorePortrait();
+                            setTimeout(() => {
+                              setSelectedMatch(null);
+                              setScoreHistory([]);
+                              resetMatch();
+                              setState('selector');
+                              handleFetchMatches(tournamentUrl);
+                            }, 400);
+                          }}
+                          className="mt-2 text-sm text-slate-500 hover:text-slate-300 font-mono tracking-widest uppercase"
+                        >
+                          ← Back to Matches
+                        </button>
+                      </div>
+
+                      {/* PANEL KANAN - PLAYER 2 */}
+                      <div className="flex flex-col items-center gap-2">
+                        <div className="w-full border-t-2 border-b-2 border-blue-500 bg-blue-900/20 py-1.5 text-center">
+                          <h2 className="text-lg sm:text-xl md:text-2xl font-black uppercase text-yellow-400 tracking-wider text-center px-2 w-full whitespace-nowrap overflow-visible" title={rightPlayer.name}>{swapped ? (selectedMatch?.player1_name || '?') : (selectedMatch?.player2_name || '?')}</h2>
+                        </div>
+
+                        <div className="flex-1 flex flex-col justify-center gap-1.5 w-full max-w-[220px] mx-auto">
+                          {[
+                            { key: 'spin', label: 'SPIN FINISH', points: 1, border: 'border-blue-500/50', hover: 'hover:bg-blue-500/20 hover:shadow-[0_0_15px_rgba(59,130,246,0.6)]', point: 'text-blue-400', colorHex: '#3b82f6', audioSrc: '/sfx-finish.mp3' },
+                            { key: 'over', label: 'OVER FINISH', points: 2, border: 'border-emerald-500/50', hover: 'hover:bg-emerald-500/20 hover:shadow-[0_0_15px_rgba(16,185,129,0.6)]', point: 'text-emerald-400', colorHex: '#22c55e', audioSrc: '/sfx-finish.mp3' },
+                            { key: 'burst', label: 'BURST FINISH', points: 2, border: 'border-fuchsia-500/50', hover: 'hover:bg-fuchsia-500/20 hover:shadow-[0_0_15px_rgba(217,70,239,0.6)]', point: 'text-fuchsia-400', colorHex: '#d946ef', audioSrc: '/sfx-finish.mp3' },
+                            { key: 'xtreme', label: 'XTREME FINISH', points: 3, border: 'border-yellow-500/50', hover: 'hover:bg-yellow-500/20 hover:shadow-[0_0_15px_rgba(234,179,8,0.6)]', point: 'text-yellow-400', colorHex: '#eab308', audioSrc: '/sfx-finish.mp3' },
+                          ].map(btn => (
+                            <button
+                              key={btn.key}
+                              type="button"
+                              onClick={() => triggerScoreAnimation(2, btn.label, btn.points, btn.colorHex, btn.audioSrc, swapped ? 'p1' : 'p2')}
+                              disabled={isScoring}
+                              className={`w-full flex items-center justify-between flex-row-reverse px-3 sm:px-4 py-2 sm:py-3 bg-black/60 border text-blue-300 font-semibold text-base sm:text-lg uppercase tracking-wider rounded-none active:scale-95 transition-all ${btn.border} ${btn.hover} ${isScoring ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            >
+                              <span>{btn.label}</span>
+                              <span className={`${btn.point} text-xl sm:text-2xl font-bold`}>+{btn.points}</span>
+                            </button>
+                          ))}
+                        </div>
+
+                        <div className="flex items-center gap-2 mt-2">
+                          {[0, 1].map(i => (
+                            <div key={i} className={`w-4 h-4 rounded-full border ${i < rightFails ? 'bg-red-600 border-red-500 shadow-[0_0_8px_rgba(220,38,38,0.6)]' : 'border-blue-700'}`} />
+                          ))}
+                          <button
+                            type="button"
+                            onClick={() => handleLaunchFail(rightSlot, rightPlayer.name)}
+                            className="px-3 py-1 bg-red-900/30 border border-red-700 text-red-400 text-xs font-black uppercase tracking-widest rounded-none hover:bg-red-600/30 active:scale-95 transition-all"
+                          >
+                            FAIL
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {hudPhase === 'PREVIEW' && (
+                <motion.div
+                  className="absolute inset-0 z-50 flex items-center justify-center w-full h-full overflow-y-auto bg-black/95 backdrop-blur-md p-4 lg:p-8"
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ duration: 0.5, type: 'spring' }}
+                >
+                  {/* CONTAINER UTAMA (Max Width membatasi agar tidak mepet layar) */}
+                  <div className="w-full max-w-4xl mx-auto flex flex-col items-center justify-center py-4 lg:py-0">
+
+                    {/* HEADER PEMENANG */}
+                    <div className="flex flex-col items-center justify-center mb-4 lg:mb-10 w-full">
+                      <h2 className="text-[30px] lg:text-sm font-bold text-green-500 tracking-[0.3em] lg:tracking-[0.5em] uppercase mb-2 animate-pulse text-center">
+                        Match Winner
+                      </h2>
+                      <div className="flex flex-row items-center justify-center gap-3 lg:gap-6 text-3xl lg:text-7xl font-black text-yellow-400 drop-shadow-[0_0_15px_rgba(250,204,21,0.6)] italic tracking-tight w-full px-4">
+                        <motion.div
+                          className="text-yellow-400 drop-shadow-[0_0_50px_rgba(250,204,21,0.6)] flex items-center flex-shrink-0"
+                          animate={{ y: [0, -6, 0] }}
+                          transition={{ repeat: Infinity, duration: 2 }}
+                        >
+                          <Trophy className="w-8 h-8 lg:w-16 lg:h-16" />
+                        </motion.div>
+                        <p className="max-w-full text-center text-5xl lg:text-8xl font-sans font-bold leading-normal pb-2">{winnerName}</p>
+                      </div>
+                    </div>
+
+                    {/* SCOREBOARD: FLEX-1 BALANCING */}
+                    <div className="w-full flex flex-row items-stretch justify-center gap-3 lg:gap-8 px-2 lg:px-0">
+
+                      {/* PLAYER 1 CARD */}
+                      <div className="flex-1 bg-slate-900/80 border border-slate-700 rounded-2xl lg:rounded-[2rem] p-3 py-5 lg:p-8 flex flex-col items-center justify-center gap-3 lg:gap-6 shadow-xl overflow-hidden min-w-0">
+                        <p className="text-[9px] lg:text-xs font-bold text-slate-500 tracking-widest uppercase">Player 1</p>
+                        <p className="text-sm lg:text-2xl font-bold font-sans uppercase text-white text-center leading-tight truncate w-full px-1" title={leftPlayer.name}>{leftPlayer.name}</p>
+                        <div className="flex items-center gap-3 lg:gap-6 mt-1 lg:mt-2">
+                          <motion.button
+                            whileTap={{ scale: 0.8 }}
+                            onClick={() => adjustPreviewScore(leftSlot, -1)}
+                            className="w-10 h-10 lg:w-14 lg:h-14 bg-slate-800 border-2 border-slate-600 rounded-lg lg:rounded-2xl flex items-center justify-center text-lg lg:text-2xl font-bold text-slate-300 hover:bg-blue-600 hover:border-blue-400 hover:text-white transition-all flex-shrink-0"
+                          >
+                            -
+                          </motion.button>
+                          <span className="text-3xl lg:text-5xl font-black text-white w-8 lg:w-16 text-center">{previewScores?.[leftSlot] ?? 0}</span>
+                          <motion.button
+                            whileTap={{ scale: 0.8 }}
+                            onClick={() => adjustPreviewScore(leftSlot, 1)}
+                            className="w-10 h-10 lg:w-14 lg:h-14 bg-slate-800 border-2 border-slate-600 rounded-lg lg:rounded-2xl flex items-center justify-center text-lg lg:text-2xl font-bold text-slate-300 hover:bg-blue-600 hover:border-blue-400 hover:text-white transition-all flex-shrink-0"
+                          >
+                            +
                           </motion.button>
                         </div>
-                     </>
-                   ); })()}
-                 </motion.div>
-               </div>
-             </div>
-           )}
+                      </div>
 
-          <MatchIntro
-            show={showIntro}
-            audioSrc="/voice-announcer.mp3"
-            onFinish={() => {
-              setShowIntro(false);
-              setHudPhase('SCORE');
-            }}
-          />
+                      {/* SEPARATOR (Desktop Only) */}
+                      <div className="hidden lg:flex flex-col justify-center items-center">
+                        <span className="text-5xl font-black text-slate-600 pb-12">:</span>
+                      </div>
 
-          {hudPhase === 'SCORE' && (
-             <div className="fixed inset-0 min-h-[100dvh] z-[999] bg-slate-950 overflow-y-auto grid place-items-center py-8">
-              <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(30,58,138,0.15)_0%,transparent_70%)]" />
+                      {/* PLAYER 2 CARD */}
+                      <div className="flex-1 bg-slate-900/80 border border-slate-700 rounded-2xl lg:rounded-[2rem] p-3 py-5 lg:p-8 flex flex-col items-center justify-center gap-3 lg:gap-6 shadow-xl overflow-hidden min-w-0">
+                        <p className="text-[9px] lg:text-xs font-bold text-slate-500 tracking-widest uppercase">Player 2</p>
+                        <p className="text-sm lg:text-2xl font-bold font-sans uppercase text-white text-center leading-tight truncate w-full px-1" title={rightPlayer.name}>{rightPlayer.name}</p>
+                        <div className="flex items-center gap-3 lg:gap-6 mt-1 lg:mt-2">
+                          <motion.button
+                            whileTap={{ scale: 0.8 }}
+                            onClick={() => adjustPreviewScore(rightSlot, -1)}
+                            className="w-10 h-10 lg:w-14 lg:h-14 bg-slate-800 border-2 border-slate-600 rounded-lg lg:rounded-2xl flex items-center justify-center text-lg lg:text-2xl font-bold text-slate-300 hover:bg-blue-600 hover:border-blue-400 hover:text-white transition-all flex-shrink-0"
+                          >
+                            -
+                          </motion.button>
+                          <span className="text-3xl lg:text-5xl font-black text-white w-8 lg:w-16 text-center">{previewScores?.[rightSlot] ?? 0}</span>
+                          <motion.button
+                            whileTap={{ scale: 0.8 }}
+                            onClick={() => adjustPreviewScore(rightSlot, 1)}
+                            className="w-10 h-10 lg:w-14 lg:h-14 bg-slate-800 border-2 border-slate-600 rounded-lg lg:rounded-2xl flex items-center justify-center text-lg lg:text-2xl font-bold text-slate-300 hover:bg-blue-600 hover:border-blue-400 hover:text-white transition-all flex-shrink-0"
+                          >
+                            +
+                          </motion.button>
+                        </div>
+                      </div>
 
-               <div className="relative w-full max-w-5xl mx-auto flex items-stretch justify-center px-2 sm:px-6 py-2 sm:py-4 pb-6 sm:pb-8">
-                <div className="w-full max-w-7xl grid grid-cols-3 gap-2 sm:gap-6 items-stretch">
-
-                  {/* PANEL KIRI - PLAYER 1 */}
-                  <div className="flex flex-col items-center gap-2">
-                     <div className="w-full border-t-2 border-b-2 border-blue-500 bg-blue-900/20 py-1.5 text-center">
-                        <h2 className="text-lg sm:text-xl md:text-2xl font-black uppercase text-yellow-400 tracking-wider text-center px-2 w-full whitespace-nowrap overflow-visible" title={leftPlayer.name}>{swapped ? (selectedMatch?.player2_name || '?') : (selectedMatch?.player1_name || '?')}</h2>
-                     </div>
-
-                    <div className="flex-1 flex flex-col justify-center gap-1.5 w-full max-w-[220px] mx-auto">
-                      {[
-                        { key: 'spin', label: 'SPIN FINISH', points: 1, border: 'border-blue-500/50', hover: 'hover:bg-blue-500/20 hover:shadow-[0_0_15px_rgba(59,130,246,0.6)]', point: 'text-blue-400', colorHex: '#3b82f6', audioSrc: '/sfx-finish.mp3' },
-                        { key: 'over', label: 'OVER FINISH', points: 2, border: 'border-emerald-500/50', hover: 'hover:bg-emerald-500/20 hover:shadow-[0_0_15px_rgba(16,185,129,0.6)]', point: 'text-emerald-400', colorHex: '#22c55e', audioSrc: '/sfx-finish.mp3' },
-                        { key: 'burst', label: 'BURST FINISH', points: 2, border: 'border-fuchsia-500/50', hover: 'hover:bg-fuchsia-500/20 hover:shadow-[0_0_15px_rgba(217,70,239,0.6)]', point: 'text-fuchsia-400', colorHex: '#d946ef', audioSrc: '/sfx-finish.mp3' },
-                        { key: 'xtreme', label: 'XTREME FINISH', points: 3, border: 'border-yellow-500/50', hover: 'hover:bg-yellow-500/20 hover:shadow-[0_0_15px_rgba(234,179,8,0.6)]', point: 'text-yellow-400', colorHex: '#eab308', audioSrc: '/sfx-finish.mp3' },
-                      ].map(btn => (
-                         <button
-                           key={btn.key}
-                           type="button"
-                           onClick={() => triggerScoreAnimation(1, btn.label, btn.points, btn.colorHex, btn.audioSrc, swapped ? 'p2' : 'p1')}
-                           disabled={isScoring}
-                           className={`w-full flex items-center justify-between px-3 sm:px-4 py-2 sm:py-3 bg-black/60 border text-blue-300 font-semibold text-base sm:text-lg uppercase tracking-wider rounded-none active:scale-95 transition-all ${btn.border} ${btn.hover} ${isScoring ? 'opacity-50 cursor-not-allowed' : ''}`}
-                         >
-                           <span>{btn.label}</span>
-                           <span className={`${btn.point} text-xl sm:text-2xl font-bold`}>+{btn.points}</span>
-                         </button>
-                      ))}
                     </div>
 
-                     <div className="flex items-center gap-2 mt-2">
-                       {[0, 1].map(i => (
-                         <div key={i} className={`w-4 h-4 rounded-full border ${i < leftFails ? 'bg-red-600 border-red-500 shadow-[0_0_8px_rgba(220,38,38,0.6)]' : 'border-blue-700'}`} />
-                       ))}
-                         <button
-                           type="button"
-                           onClick={() => handleLaunchFail(leftSlot, leftPlayer.name)}
-                        className="px-3 py-1 bg-red-900/30 border border-red-700 text-red-400 text-xs font-black uppercase tracking-widest rounded-none hover:bg-red-600/30 active:scale-95 transition-all"
+                    {/* ACTION BUTTONS */}
+                    <div className="w-full flex flex-row gap-3 lg:gap-6 mt-6 lg:mt-12 px-2 lg:px-0">
+                      <motion.button
+                        type="button"
+                        onClick={resetMatch}
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.95 }}
+                        className="flex-1 py-3 lg:py-5 bg-slate-800 rounded-xl lg:rounded-2xl border-2 border-slate-600 text-slate-300 text-xs lg:text-sm font-bold tracking-widest hover:bg-slate-700 transition-colors uppercase"
                       >
-                        FAIL
-                      </button>
+                        Cancel
+                      </motion.button>
+                      <motion.button
+                        type="button"
+                        onClick={handleSubmit}
+                        disabled={submitting}
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.95 }}
+                        className="flex-[2] py-3 lg:py-5 bg-blue-600 rounded-xl lg:rounded-2xl border border-blue-500 text-white text-xs lg:text-sm font-black tracking-widest hover:bg-blue-500 shadow-[0_0_20px_rgba(37,99,235,0.4)] transition-all active:scale-95 uppercase flex items-center justify-center gap-2 lg:gap-3 disabled:opacity-50"
+                      >
+                        {submitting ? <Loader2 className="animate-spin w-4 h-4 lg:w-5 lg:h-5" /> : <Trophy className="w-4 h-4 lg:w-5 lg:h-5" />}
+                        <span className="truncate">{submitting ? 'Submitting...' : 'Submit Score'}</span>
+                      </motion.button>
                     </div>
+
+                  </div>
+                </motion.div>
+              )}
+
+              {hudPhase === 'POST_MATCH' && (
+                <div className="w-full h-full min-h-screen flex flex-col items-center p-4 md:p-8 overflow-y-auto">
+                  <h2 className="text-2xl sm:text-3xl font-black text-green-400 mb-1 tracking-tighter">SKOR BERHASIL DISIMPAN!</h2>
+                  <p className="text-sm md:text-base font-bold text-slate-400 tracking-widest uppercase mt-4 mb-8">Pilih Pertandingan Selanjutnya</p>
+
+                  <div className="w-full flex flex-col gap-4 max-w-lg mx-auto">
+                    {(() => {
+                      const remainingMatches = matches ? matches.filter(m => m.match_id !== selectedMatch?.match_id) : [];
+
+                      if (loading) {
+                        return (
+                          <div className="text-center py-10">
+                            <Loader2 className="animate-spin text-blue-400 mx-auto mb-3" size={32} />
+                            <p className="text-[10px] text-blue-400/60 font-black uppercase tracking-widest">Memuat sisa pertandingan...</p>
+                          </div>
+                        );
+                      }
+
+                      if (remainingMatches.length > 0) {
+                        return remainingMatches.map((match, index) => (
+                          <button
+                            key={match.match_id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedMatch(match);
+                              setScores({ p1: 0, p2: 0 });
+                              setLaunchFails({ p1: 0, p2: 0 });
+                              setSwapped(false);
+                              setShowReady(false);
+                              setCountdown(3);
+                              setPreviewScores(null);
+                              setReadyPlayers({ p1: false, p2: false });
+                              setHudPhase('READY');
+                            }}
+                            className="w-full max-w-2xl p-5 md:p-6 rounded-2xl bg-slate-900 border border-slate-700 hover:border-blue-500 hover:bg-slate-800 transition-all duration-300 flex flex-col gap-2 cursor-pointer shadow-lg hover:shadow-blue-500/20 group"
+                          >
+                            <div className="flex items-center justify-between">
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs lg:text-sm font-black text-blue-400 tracking-widest uppercase mb-1">{match.round < 0 ? `LOWER BRACKET ${-match.round}` : `ROUND ${match.round}`} • MATCH {match.identifier || match.suggested_play_order || index + 1}</p>
+                                <p className="text-xl lg:text-2xl font-sans font-bold text-white group-hover:text-blue-300 transition-colors tracking-tight truncate">{match.player1_name}</p>
+                                <p className="text-sm font-bold italic text-red-500/80 my-1">VS</p>
+                                <p className="text-xl lg:text-2xl font-sans font-bold text-white group-hover:text-blue-300 transition-colors tracking-tight truncate">{match.player2_name}</p>
+                              </div>
+                              <div className="text-right ml-4">
+                              </div>
+                            </div>
+                          </button>
+                        ));
+                      }
+
+                      return (
+                        <div className="text-center text-blue-300 py-10">
+                          <p className="text-lg font-black mb-2">MEMPERBARUI ARENA BRACKET...</p>
+                          <p className="text-xs text-blue-400/60">Sinkronisasi dalam proses. Jangan tutup layar</p>
+                        </div>
+                      );
+                    })()}
                   </div>
 
-                  {/* PANEL TENGAH */}
-                  <div className="flex flex-col items-center justify-center gap-2 sm:gap-3">
-                    <div className="w-full border-x-4 border-blue-500 bg-blue-900/10 px-3 sm:px-6 py-1.5 text-center">
-                      <p className="text-[10px] sm:text-xs font-black text-blue-400 uppercase tracking-[0.3em]">Babak {selectedMatch?.round ?? 1}</p>
-                      <div className="flex items-center justify-center gap-3 mt-1">
-                        <button
-                          onClick={() => setRaceToTarget(prev => Math.max(4, prev - 1))}
-                          className="w-6 h-6 flex items-center justify-center rounded-full bg-slate-800 text-slate-400 hover:text-white"
-                        > - </button>
-                        <span className="text-xs font-bold tracking-widest text-slate-400 uppercase">
-                          RACE TO {raceToTarget}
-                        </span>
-                        <button
-                          onClick={() => setRaceToTarget(prev => prev + 1)}
-                          className="w-6 h-6 flex items-center justify-center rounded-full bg-slate-800 text-slate-400 hover:text-white"
-                        > + </button>
-                      </div>
-                    </div>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await restorePortrait();
+                      setTimeout(() => {
+                        setSelectedMatch(null);
+                        setScoreHistory([]);
+                        resetMatch();
+                        setState('selector');
+                        handleFetchMatches(tournamentUrl);
+                      }, 400);
+                    }}
+                    className="mt-6 w-full sm:w-auto px-8 py-3 bg-gray-900 border border-red-500/50 text-red-400 font-black text-xs uppercase tracking-widest rounded-2xl active:scale-95 transition-all hover:bg-red-600 hover:text-white hover:border-red-500"
+                  >
+                    Exit Referee Mode
+                  </button>
 
-                    <div className="flex items-center justify-center gap-2 sm:gap-4">
-                      <span className="text-5xl sm:text-8xl md:text-9xl font-black text-blue-400 drop-shadow-[0_0_20px_rgba(59,130,246,0.8)] leading-none">{leftScore}</span>
-                      <span className="text-2xl sm:text-4xl font-black text-blue-400/40">:</span>
-                      <span className="text-5xl sm:text-8xl md:text-9xl font-black text-blue-400 drop-shadow-[0_0_20px_rgba(59,130,246,0.8)] leading-none">{rightScore}</span>
-                    </div>
-
-                    <div className="flex gap-4 w-full mt-6">
-                      <button 
-                        type="button"
-                        onClick={handleUndo} 
-                        disabled={scoreHistory.length === 0}
-                        className="flex-1 py-3 border border-orange-500 text-orange-500 font-bold uppercase tracking-widest hover:bg-orange-500/20 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        UNDO
-                      </button>
-                      <button 
-                        type="button"
-                        onClick={handleRelaunch} 
-                        className="flex-1 py-3 border border-gray-400 text-gray-400 font-bold uppercase tracking-widest hover:bg-gray-400/20 transition"
-                      >
-                        RELAUNCH
-                      </button>
-                    </div>
-
-                     <button
-                       type="button"
-                       onClick={async () => {
-                         await restorePortrait();
-                         setTimeout(() => {
-                           setSelectedMatch(null);
-                           setScoreHistory([]);
-                           resetMatch();
-                           setState('selector');
-                           handleFetchMatches(tournamentUrl);
-                         }, 400);
-                       }}
-                       className="mt-2 text-sm text-slate-500 hover:text-slate-300 font-mono tracking-widest uppercase"
-                     >
-                      ← Back to Matches
+                  <div className="mt-4">
+                    <button
+                      onClick={() => handleFetchMatches(true)}
+                      className="px-4 py-2 bg-blue-400/10 border border-blue-400/30 text-blue-400 text-[10px] font-black uppercase tracking-widest rounded-xl active:scale-95 transition-all hover:bg-blue-400/20"
+                    >
+                      🔄 REFRESH DATA
                     </button>
                   </div>
-
-                  {/* PANEL KANAN - PLAYER 2 */}
-                  <div className="flex flex-col items-center gap-2">
-                     <div className="w-full border-t-2 border-b-2 border-blue-500 bg-blue-900/20 py-1.5 text-center">
-                        <h2 className="text-lg sm:text-xl md:text-2xl font-black uppercase text-yellow-400 tracking-wider text-center px-2 w-full whitespace-nowrap overflow-visible" title={rightPlayer.name}>{swapped ? (selectedMatch?.player1_name || '?') : (selectedMatch?.player2_name || '?')}</h2>
-                     </div>
-
-                    <div className="flex-1 flex flex-col justify-center gap-1.5 w-full max-w-[220px] mx-auto">
-                      {[
-                        { key: 'spin', label: 'SPIN FINISH', points: 1, border: 'border-blue-500/50', hover: 'hover:bg-blue-500/20 hover:shadow-[0_0_15px_rgba(59,130,246,0.6)]', point: 'text-blue-400', colorHex: '#3b82f6', audioSrc: '/sfx-finish.mp3' },
-                        { key: 'over', label: 'OVER FINISH', points: 2, border: 'border-emerald-500/50', hover: 'hover:bg-emerald-500/20 hover:shadow-[0_0_15px_rgba(16,185,129,0.6)]', point: 'text-emerald-400', colorHex: '#22c55e', audioSrc: '/sfx-finish.mp3' },
-                        { key: 'burst', label: 'BURST FINISH', points: 2, border: 'border-fuchsia-500/50', hover: 'hover:bg-fuchsia-500/20 hover:shadow-[0_0_15px_rgba(217,70,239,0.6)]', point: 'text-fuchsia-400', colorHex: '#d946ef', audioSrc: '/sfx-finish.mp3' },
-                        { key: 'xtreme', label: 'XTREME FINISH', points: 3, border: 'border-yellow-500/50', hover: 'hover:bg-yellow-500/20 hover:shadow-[0_0_15px_rgba(234,179,8,0.6)]', point: 'text-yellow-400', colorHex: '#eab308', audioSrc: '/sfx-finish.mp3' },
-                      ].map(btn => (
-                         <button
-                           key={btn.key}
-                           type="button"
-                           onClick={() => triggerScoreAnimation(2, btn.label, btn.points, btn.colorHex, btn.audioSrc, swapped ? 'p1' : 'p2')}
-                           disabled={isScoring}
-                           className={`w-full flex items-center justify-between flex-row-reverse px-3 sm:px-4 py-2 sm:py-3 bg-black/60 border text-blue-300 font-semibold text-base sm:text-lg uppercase tracking-wider rounded-none active:scale-95 transition-all ${btn.border} ${btn.hover} ${isScoring ? 'opacity-50 cursor-not-allowed' : ''}`}
-                         >
-                           <span>{btn.label}</span>
-                           <span className={`${btn.point} text-xl sm:text-2xl font-bold`}>+{btn.points}</span>
-                         </button>
-                      ))}
-                    </div>
-
-                     <div className="flex items-center gap-2 mt-2">
-                       {[0, 1].map(i => (
-                         <div key={i} className={`w-4 h-4 rounded-full border ${i < rightFails ? 'bg-red-600 border-red-500 shadow-[0_0_8px_rgba(220,38,38,0.6)]' : 'border-blue-700'}`} />
-                       ))}
-                         <button
-                           type="button"
-                           onClick={() => handleLaunchFail(rightSlot, rightPlayer.name)}
-                        className="px-3 py-1 bg-red-900/30 border border-red-700 text-red-400 text-xs font-black uppercase tracking-widest rounded-none hover:bg-red-600/30 active:scale-95 transition-all"
-                      >
-                        FAIL
-                      </button>
-                    </div>
-                  </div>
                 </div>
-              </div>
+              )}
             </div>
-          )}
 
-          {hudPhase === 'PREVIEW' && (
-            <motion.div
-              className="absolute inset-0 z-50 flex items-center justify-center w-full h-full overflow-y-auto bg-black/95 backdrop-blur-md p-4 lg:p-8"
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ duration: 0.5, type: 'spring' }}
-            >
-              {/* CONTAINER UTAMA (Max Width membatasi agar tidak mepet layar) */}
-              <div className="w-full max-w-4xl mx-auto flex flex-col items-center justify-center py-4 lg:py-0">
-                
-                {/* HEADER PEMENANG */}
-                <div className="flex flex-col items-center justify-center mb-4 lg:mb-10 w-full">
-                  <h2 className="text-[30px] lg:text-sm font-bold text-green-500 tracking-[0.3em] lg:tracking-[0.5em] uppercase mb-2 animate-pulse text-center">
-                    Match Winner
-                  </h2>
-                  <div className="flex flex-row items-center justify-center gap-3 lg:gap-6 text-3xl lg:text-7xl font-black text-yellow-400 drop-shadow-[0_0_15px_rgba(250,204,21,0.6)] italic tracking-tight w-full px-4">
-                    <motion.div
-                      className="text-yellow-400 drop-shadow-[0_0_50px_rgba(250,204,21,0.6)] flex items-center flex-shrink-0"
-                      animate={{ y: [0, -6, 0] }}
-                      transition={{ repeat: Infinity, duration: 2 }}
-                    >
-                      <Trophy className="w-8 h-8 lg:w-16 lg:h-16"/>
-                    </motion.div>
-                     <p className="max-w-full text-center text-5xl lg:text-8xl font-sans font-bold leading-normal pb-2">{winnerName}</p>
-                  </div>
-                </div>
-
-                {/* SCOREBOARD: FLEX-1 BALANCING */}
-                <div className="w-full flex flex-row items-stretch justify-center gap-3 lg:gap-8 px-2 lg:px-0">
-                  
-                   {/* PLAYER 1 CARD */}
-                   <div className="flex-1 bg-slate-900/80 border border-slate-700 rounded-2xl lg:rounded-[2rem] p-3 py-5 lg:p-8 flex flex-col items-center justify-center gap-3 lg:gap-6 shadow-xl overflow-hidden min-w-0">
-                     <p className="text-[9px] lg:text-xs font-bold text-slate-500 tracking-widest uppercase">Player 1</p>
-                       <p className="text-sm lg:text-2xl font-bold font-sans uppercase text-white text-center leading-tight truncate w-full px-1" title={leftPlayer.name}>{leftPlayer.name}</p>
-                     <div className="flex items-center gap-3 lg:gap-6 mt-1 lg:mt-2">
-                       <motion.button
-                         whileTap={{ scale: 0.8 }}
-                         onClick={() => adjustPreviewScore(leftSlot, -1)}
-                         className="w-10 h-10 lg:w-14 lg:h-14 bg-slate-800 border-2 border-slate-600 rounded-lg lg:rounded-2xl flex items-center justify-center text-lg lg:text-2xl font-bold text-slate-300 hover:bg-blue-600 hover:border-blue-400 hover:text-white transition-all flex-shrink-0"
-                       >
-                         -
-                       </motion.button>
-                       <span className="text-3xl lg:text-5xl font-black text-white w-8 lg:w-16 text-center">{previewScores?.[leftSlot] ?? 0}</span>
-                       <motion.button
-                         whileTap={{ scale: 0.8 }}
-                         onClick={() => adjustPreviewScore(leftSlot, 1)}
-                         className="w-10 h-10 lg:w-14 lg:h-14 bg-slate-800 border-2 border-slate-600 rounded-lg lg:rounded-2xl flex items-center justify-center text-lg lg:text-2xl font-bold text-slate-300 hover:bg-blue-600 hover:border-blue-400 hover:text-white transition-all flex-shrink-0"
-                       >
-                         +
-                       </motion.button>
-                     </div>
-                   </div>
-
-                   {/* SEPARATOR (Desktop Only) */}
-                   <div className="hidden lg:flex flex-col justify-center items-center">
-                      <span className="text-5xl font-black text-slate-600 pb-12">:</span>
-                   </div>
-
-                   {/* PLAYER 2 CARD */}
-                   <div className="flex-1 bg-slate-900/80 border border-slate-700 rounded-2xl lg:rounded-[2rem] p-3 py-5 lg:p-8 flex flex-col items-center justify-center gap-3 lg:gap-6 shadow-xl overflow-hidden min-w-0">
-                     <p className="text-[9px] lg:text-xs font-bold text-slate-500 tracking-widest uppercase">Player 2</p>
-                       <p className="text-sm lg:text-2xl font-bold font-sans uppercase text-white text-center leading-tight truncate w-full px-1" title={rightPlayer.name}>{rightPlayer.name}</p>
-                     <div className="flex items-center gap-3 lg:gap-6 mt-1 lg:mt-2">
-                       <motion.button
-                         whileTap={{ scale: 0.8 }}
-                         onClick={() => adjustPreviewScore(rightSlot, -1)}
-                         className="w-10 h-10 lg:w-14 lg:h-14 bg-slate-800 border-2 border-slate-600 rounded-lg lg:rounded-2xl flex items-center justify-center text-lg lg:text-2xl font-bold text-slate-300 hover:bg-blue-600 hover:border-blue-400 hover:text-white transition-all flex-shrink-0"
-                       >
-                         -
-                       </motion.button>
-                       <span className="text-3xl lg:text-5xl font-black text-white w-8 lg:w-16 text-center">{previewScores?.[rightSlot] ?? 0}</span>
-                       <motion.button
-                         whileTap={{ scale: 0.8 }}
-                         onClick={() => adjustPreviewScore(rightSlot, 1)}
-                         className="w-10 h-10 lg:w-14 lg:h-14 bg-slate-800 border-2 border-slate-600 rounded-lg lg:rounded-2xl flex items-center justify-center text-lg lg:text-2xl font-bold text-slate-300 hover:bg-blue-600 hover:border-blue-400 hover:text-white transition-all flex-shrink-0"
-                       >
-                         +
-                       </motion.button>
-                     </div>
-                   </div>
-
-                </div>
-
-                {/* ACTION BUTTONS */}
-                <div className="w-full flex flex-row gap-3 lg:gap-6 mt-6 lg:mt-12 px-2 lg:px-0">
-                  <motion.button
-                    type="button"
-                    onClick={resetMatch}
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.95 }}
-                    className="flex-1 py-3 lg:py-5 bg-slate-800 rounded-xl lg:rounded-2xl border-2 border-slate-600 text-slate-300 text-xs lg:text-sm font-bold tracking-widest hover:bg-slate-700 transition-colors uppercase"
-                  >
-                    Cancel
-                  </motion.button>
-                  <motion.button
-                    type="button"
-                    onClick={handleSubmit}
-                    disabled={submitting}
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.95 }}
-                    className="flex-[2] py-3 lg:py-5 bg-blue-600 rounded-xl lg:rounded-2xl border border-blue-500 text-white text-xs lg:text-sm font-black tracking-widest hover:bg-blue-500 shadow-[0_0_20px_rgba(37,99,235,0.4)] transition-all active:scale-95 uppercase flex items-center justify-center gap-2 lg:gap-3 disabled:opacity-50"
-                  >
-                    {submitting ? <Loader2 className="animate-spin w-4 h-4 lg:w-5 lg:h-5"/> : <Trophy className="w-4 h-4 lg:w-5 lg:h-5"/>}
-                    <span className="truncate">{submitting ? 'Submitting...' : 'Submit Score'}</span>
-                  </motion.button>
-                </div>
-
-              </div>
-            </motion.div>
-          )}
-
-          {hudPhase === 'POST_MATCH' && (
-            <div className="w-full h-full min-h-screen flex flex-col items-center p-4 md:p-8 overflow-y-auto">
-              <h2 className="text-2xl sm:text-3xl font-black text-green-400 mb-1 tracking-tighter">SKOR BERHASIL DISIMPAN!</h2>
-              <p className="text-sm md:text-base font-bold text-slate-400 tracking-widest uppercase mt-4 mb-8">Pilih Pertandingan Selanjutnya</p>
-
-              <div className="w-full flex flex-col gap-4 max-w-lg mx-auto">
-                {(() => {
-                  const remainingMatches = matches ? matches.filter(m => m.match_id !== selectedMatch?.match_id) : [];
-
-                  if (loading) {
-                    return (
-                      <div className="text-center py-10">
-                        <Loader2 className="animate-spin text-blue-400 mx-auto mb-3" size={32} />
-                        <p className="text-[10px] text-blue-400/60 font-black uppercase tracking-widest">Memuat sisa pertandingan...</p>
-                      </div>
-                    );
-                  }
-
-                  if (remainingMatches.length > 0) {
-                    return remainingMatches.map((match, index) => (
-                      <button
-                        key={match.match_id}
-                        type="button"
-                        onClick={() => {
-                          setSelectedMatch(match);
-                          setScores({ p1: 0, p2: 0 });
-                          setLaunchFails({ p1: 0, p2: 0 });
-                          setSwapped(false);
-                          setShowReady(false);
-                          setCountdown(3);
-                          setPreviewScores(null);
-                          setReadyPlayers({ p1: false, p2: false });
-                          setHudPhase('READY');
-                        }}
-                        className="w-full max-w-2xl p-5 md:p-6 rounded-2xl bg-slate-900 border border-slate-700 hover:border-blue-500 hover:bg-slate-800 transition-all duration-300 flex flex-col gap-2 cursor-pointer shadow-lg hover:shadow-blue-500/20 group"
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className="flex-1 min-w-0">
-                            <p className="text-xs lg:text-sm font-black text-blue-400 tracking-widest uppercase mb-1">{match.round < 0 ? `LOWER BRACKET ${-match.round}` : `ROUND ${match.round}`} • MATCH {match.identifier || match.suggested_play_order || index + 1}</p>
-                             <p className="text-xl lg:text-2xl font-sans font-bold text-white group-hover:text-blue-300 transition-colors tracking-tight truncate">{match.player1_name}</p>
-                            <p className="text-sm font-bold italic text-red-500/80 my-1">VS</p>
-                             <p className="text-xl lg:text-2xl font-sans font-bold text-white group-hover:text-blue-300 transition-colors tracking-tight truncate">{match.player2_name}</p>
-                          </div>
-                          <div className="text-right ml-4">
-                          </div>
-                        </div>
-                      </button>
-                    ));
-                  }
-
-                  return (
-                    <div className="text-center text-blue-300 py-10">
-                      <p className="text-lg font-black mb-2">MEMPERBARUI ARENA BRACKET...</p>
-                      <p className="text-xs text-blue-400/60">Sinkronisasi dalam proses. Jangan tutup layar</p>
-                    </div>
-                  );
-                })()}
-              </div>
-
-              <button
-                type="button"
-                onClick={async () => {
-                  await restorePortrait();
-                  setTimeout(() => {
-                    setSelectedMatch(null);
-                    setScoreHistory([]);
-                    resetMatch();
-                    setState('selector');
-                    handleFetchMatches(tournamentUrl);
-                  }, 400);
-                }}
-                className="mt-6 w-full sm:w-auto px-8 py-3 bg-gray-900 border border-red-500/50 text-red-400 font-black text-xs uppercase tracking-widest rounded-2xl active:scale-95 transition-all hover:bg-red-600 hover:text-white hover:border-red-500"
-              >
-                Exit Referee Mode
-              </button>
-              
-              <div className="mt-4">
-                <button
-                  onClick={() => handleFetchMatches(true)}
-                  className="px-4 py-2 bg-blue-400/10 border border-blue-400/30 text-blue-400 text-[10px] font-black uppercase tracking-widest rounded-xl active:scale-95 transition-all hover:bg-blue-400/20"
+            {scoreEvent && (
+              <AnimatePresence>
+                <motion.div
+                  className="fixed inset-0 z-[999] bg-black flex items-center justify-center overflow-hidden"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
                 >
-                  🔄 REFRESH DATA
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
+                  {(() => {
+                    const [word1, word2] = scoreEvent.type.split(' ');
+                    const isStacked = scoreEvent.type === 'BURST FINISH' || scoreEvent.type === 'XTREME FINISH';
+                    const isRelaunch = scoreEvent.type === 'RELAUNCH';
+                    const isLaunchFail = scoreEvent.type === 'LAUNCH FAIL';
+                    const isFailPenalty = scoreEvent.type === 'FAIL PENALTY';
+                    const playerName = (() => {
+                      if ((isLaunchFail || isFailPenalty) && scoreEvent.player) {
+                        return String(scoreEvent.player).toUpperCase();
+                      }
+                      return null;
+                    })();
 
-        {scoreEvent && (
-          <AnimatePresence>
-            <motion.div
-              className="fixed inset-0 z-[999] bg-black flex items-center justify-center overflow-hidden"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-            >
-              {(() => {
-                const [word1, word2] = scoreEvent.type.split(' ');
-                const isStacked = scoreEvent.type === 'BURST FINISH' || scoreEvent.type === 'XTREME FINISH';
-                const isRelaunch = scoreEvent.type === 'RELAUNCH';
-                const isLaunchFail = scoreEvent.type === 'LAUNCH FAIL';
-                const isFailPenalty = scoreEvent.type === 'FAIL PENALTY';
-                const playerName = (() => {
-                  if ((isLaunchFail || isFailPenalty) && scoreEvent.player) {
-                    return String(scoreEvent.player).toUpperCase();
-                  }
-                  return null;
-                })();
-
-                return (
-                  <motion.div
-                    className="flex flex-col items-center justify-center italic font-black uppercase tracking-widest leading-none drop-shadow-2xl"
-                    style={{ WebkitTextStroke: `${isMobile ? '1.5px' : '4px'} ${scoreEvent.colorHex}`, color: 'transparent' }}
-                    initial={isRelaunch || isLaunchFail || isFailPenalty ? { opacity: 0, scale: 0.8 } : { x: scoreEvent.player === 1 ? '-100vw' : '100vw', opacity: 0, skewX: scoreEvent.player === 1 ? -15 : 15 }}
-                    animate={{ x: 0, opacity: 1, scale: 1, skewX: 0 }}
-                    exit={{ scale: 1.5, opacity: 0 }}
-                    transition={{ type: 'spring', damping: 15, stiffness: 100 }}
-                  >
-                    {isStacked ? (
-                      <>
-                        <span style={{ fontSize: '15vw', marginBottom: '-2vw' }}>{word1}</span>
-                        <span style={{ fontSize: '12vw' }}>{word2}</span>
-                      </>
-                    ) : isRelaunch ? (
-                      <span style={{ fontSize: '12vw' }}>RELAUNCH</span>
-                    ) : isLaunchFail || isFailPenalty ? (
-                      <div className="flex flex-col items-center">
-                        <span style={{ fontSize: '10vw' }}>{scoreEvent.type}</span>
-                        {playerName && (
-                          <span className="text-white" style={{ WebkitTextStroke: '0px', color: 'white', fontSize: '6vw', marginTop: '2vw' }}>
-                            {playerName}
-                          </span>
+                    return (
+                      <motion.div
+                        className="flex flex-col items-center justify-center italic font-black uppercase tracking-widest leading-none drop-shadow-2xl"
+                        style={{ WebkitTextStroke: `${isMobile ? '1.5px' : '4px'} ${scoreEvent.colorHex}`, color: 'transparent' }}
+                        initial={isRelaunch || isLaunchFail || isFailPenalty ? { opacity: 0, scale: 0.8 } : { x: scoreEvent.player === 1 ? '-100vw' : '100vw', opacity: 0, skewX: scoreEvent.player === 1 ? -15 : 15 }}
+                        animate={{ x: 0, opacity: 1, scale: 1, skewX: 0 }}
+                        exit={{ scale: 1.5, opacity: 0 }}
+                        transition={{ type: 'spring', damping: 15, stiffness: 100 }}
+                      >
+                        {isStacked ? (
+                          <>
+                            <span style={{ fontSize: '15vw', marginBottom: '-2vw' }}>{word1}</span>
+                            <span style={{ fontSize: '12vw' }}>{word2}</span>
+                          </>
+                        ) : isRelaunch ? (
+                          <span style={{ fontSize: '12vw' }}>RELAUNCH</span>
+                        ) : isLaunchFail || isFailPenalty ? (
+                          <div className="flex flex-col items-center">
+                            <span style={{ fontSize: '10vw' }}>{scoreEvent.type}</span>
+                            {playerName && (
+                              <span className="text-white" style={{ WebkitTextStroke: '0px', color: 'white', fontSize: '6vw', marginTop: '2vw' }}>
+                                {playerName}
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <span style={{ fontSize: '10vw' }}>{scoreEvent.type}</span>
                         )}
-                      </div>
-                    ) : (
-                      <span style={{ fontSize: '10vw' }}>{scoreEvent.type}</span>
-                    )}
-                  </motion.div>
-                );
-              })()}
-            </motion.div>
-          </AnimatePresence>
+                      </motion.div>
+                    );
+                  })()}
+                </motion.div>
+              </AnimatePresence>
+            )}
+          </>
         )}
-      </>
-      )}
+      </div>
     </div>
   );
 }

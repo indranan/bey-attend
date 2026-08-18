@@ -3,8 +3,8 @@ import { Loader2, ChevronDown } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
 import { getRules } from '../utils/api';
 
-const PRESET_NAMA = ['Lalapan Week X Bulan - Liga 2026', 'Lalapan Final Bulan - Liga 2026 ','Lalapan Casual Play Today'];
-const PRESET_LOKASI = ['Pasar Tingkat Lamongan', 'Cafe Fvorsten Lamongan','Saglam'];
+const PRESET_NAMA = ['Lalapan Week X Bulan - Liga 2026', 'Lalapan Final Bulan - Liga 2026', 'Lalapan Casual Play Today'];
+const PRESET_LOKASI = ['Pasar Tingkat Lamongan', 'Cafe Fvorsten Lamongan', 'Saglam'];
 const ZONA_OPTIONS = ['WIB', 'WITA', 'WIT'];
 
 const HARI = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
@@ -20,19 +20,51 @@ const formatTanggalIndonesia = (isoDate) => {
   return `${hari}, ${tgl} ${bulan} ${tahun}`;
 };
 
-const CreateEventModal = ({ show, onClose, onSubmit, isSubmitting, rules = [] }) => {
-  const [nama, setNama] = useState('Lalapan Week 4 Juli - Liga 2026');
-  const [lokasi, setLokasi] = useState('Pasar Tingkat Lamongan');
-  const [tanggal, setTanggal] = useState('');
-  const [jam, setJam] = useState('19:30');
-  const [zona, setZona] = useState('WIB');
+const parseTanggalIndonesia = (formatted) => {
+  if (!formatted) return '';
+  const map = {};
+  BULAN.forEach((b, i) => { map[b.toLowerCase()] = String(i + 1).padStart(2, '0'); });
+  const match = formatted.match(/(\d{1,2})\s+(Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember)\s+(\d{4})/i);
+  if (!match) return formatted;
+  const day = String(match[1]).padStart(2, '0');
+  const month = map[match[2].toLowerCase()] || '01';
+  const year = match[3];
+  return `${year}-${month}-${day}`;
+};
+
+const EditEventModal = ({ show, onClose, onSubmit, isSubmitting, initialData = {}, rules = [] }) => {
+  const [nama, setNama] = useState(initialData.nama || '');
+  const [lokasi, setLokasi] = useState(initialData.lokasi || '');
+  const [tanggal, setTanggal] = useState(() => parseTanggalIndonesia(initialData.tanggal_event || ''));
+  const [jam, setJam] = useState(() => {
+    if (!initialData.waktu_event) return '19:30';
+    const parts = String(initialData.waktu_event).trim().split(' ');
+    return parts[0] || '19:30';
+  });
+  const [zona, setZona] = useState(() => {
+    if (!initialData.waktu_event) return 'WIB';
+    const parts = String(initialData.waktu_event).trim().split(' ');
+    return parts[1] || 'WIB';
+  });
   const [openNama, setOpenNama] = useState(false);
   const [openLokasi, setOpenLokasi] = useState(false);
-  const [selectedRuleId, setSelectedRuleId] = useState('');
+  const [selectedRuleId, setSelectedRuleId] = useState(initialData.rule_id || '');
   const [openRule, setOpenRule] = useState(false);
   const namaRef = useRef(null);
   const lokasiRef = useRef(null);
   const ruleRef = useRef(null);
+
+  useEffect(() => {
+    if (show) {
+      setNama(initialData.nama || '');
+      setLokasi(initialData.lokasi || '');
+      setTanggal(parseTanggalIndonesia(initialData.tanggal_event || ''));
+      const waktuParts = String(initialData.waktu_event || '').trim().split(' ');
+      setJam(waktuParts[0] || '19:30');
+      setZona(waktuParts[1] || 'WIB');
+      setSelectedRuleId(initialData.rule_id || '');
+    }
+  }, [show, initialData]);
 
   useEffect(() => {
     const handler = (e) => {
@@ -44,18 +76,12 @@ const CreateEventModal = ({ show, onClose, onSubmit, isSubmitting, rules = [] })
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  useEffect(() => {
-    if (show && rules.length > 0) {
-      const active = rules.find(r => String(r.status || '').toLowerCase() === 'aktif');
-      if (active) setSelectedRuleId(active.rule_id || '');
-    }
-  }, [show, rules]);
-
   const handleSubmit = () => {
     if (!nama.trim() || !lokasi.trim() || !tanggal) return;
     const formattedDate = formatTanggalIndonesia(tanggal);
     const finalWaktu = `${formattedDate} ${jam} ${zona}`;
     onSubmit({
+      eventId: initialData.event_id || initialData.id,
       nama: nama.trim(),
       lokasi: lokasi.trim(),
       tanggal_event: formattedDate,
@@ -123,10 +149,10 @@ const CreateEventModal = ({ show, onClose, onSubmit, isSubmitting, rules = [] })
             <div className="space-y-4">
               <div className="text-center mb-6">
                 <h3 className="text-xl font-black italic uppercase tracking-tighter text-gray-900 dark:text-white leading-none">
-                  LALAPAN X-EVENT
+                  EDIT EVENT
                 </h3>
                 <p className="text-[10px] text-gray-500 dark:text-gray-400 font-bold uppercase tracking-widest mt-2 italic">
-                  Setup Arena BEYBLADE
+                  Reschedule / Edit
                 </p>
               </div>
 
@@ -237,7 +263,7 @@ const CreateEventModal = ({ show, onClose, onSubmit, isSubmitting, rules = [] })
                   disabled={isSubmitting || !nama.trim() || !lokasi.trim() || !tanggal}
                   className="flex-1 py-4 bg-primary dark:text-white rounded-2xl font-black uppercase italic text-xs shadow-lg shadow-primary/30 active:scale-95 transition-all disabled:opacity-50"
                 >
-                  {isSubmitting ? <Loader2 className="animate-spin mx-auto" size={16} /> : 'Aktifkan'}
+                  {isSubmitting ? <Loader2 className="animate-spin mx-auto" size={16} /> : 'Simpan'}
                 </button>
               </div>
             </div>
@@ -248,4 +274,4 @@ const CreateEventModal = ({ show, onClose, onSubmit, isSubmitting, rules = [] })
   );
 };
 
-export default CreateEventModal;
+export default EditEventModal;

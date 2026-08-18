@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { getRule } from '../utils/api';
+import { getRule, getRuleById } from '../utils/api';
 import { BookOpen, AlertTriangle, RefreshCw, X, ChevronLeft, ChevronRight } from 'lucide-react';
 
 const RuleSkeleton = () => (
@@ -31,7 +31,7 @@ const formatDriveImageUrl = (url) => {
   return url;
 };
 
-export default function Rule() {
+export default function Rule({ ruleId }) {
   const [rule, setRule] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -60,7 +60,7 @@ export default function Rule() {
     setLoading(true);
     setError(null);
     try {
-      const res = await getRule();
+      const res = ruleId ? await getRuleById(ruleId) : await getRule();
       setRule(res || {});
     } catch (err) {
       setError('Gagal memuat rule. Periksa koneksi internet.');
@@ -72,7 +72,7 @@ export default function Rule() {
 
   useEffect(() => {
     fetchRule();
-  }, []);
+  }, [ruleId]);
 
   useEffect(() => {
     const container = carouselRef.current;

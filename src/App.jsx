@@ -1,4 +1,5 @@
 import { useContext, useEffect, useState } from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { AuthContext } from './context/AuthContext';
 import GoogleSignInButton from './components/GoogleSignInButton';
 import UserAvatar from './components/UserAvatar';
@@ -8,10 +9,13 @@ import {
   LogOut, Loader2, MapPin, Trophy, UserCircle, ShieldCheck, Swords, Minimize, BookOpen
 } from 'lucide-react';
 import toast, { Toaster } from 'react-hot-toast';
-import { getFromGas, postToGas, updateBio, uploadProfilePhoto, updatePoints, createTournament, startTournament, randomizeParticipants } from './utils/api';
+import { getFromGas, postToGas, postToGasLongRunning, updateBio, uploadProfilePhoto, updatePoints, createTournament, startEvent, endEvent, finishTournament, updateEvent } from './utils/api';
 import CancelModal from './components/CancelModal';
 import CreateEventModal from './components/CreateEventModal';
+import ConfirmModal from './components/ConfirmModal';
+import EditEventModal from './components/EditEventModal';
 import EventCard from './components/EventCard';
+import BladersPage from './components/BladersPage';
 import ParticipantList from './components/ParticipantList';
 import StandingsContent from './components/StandingsContent';
 import AdminContent from './components/AdminContent';
@@ -19,11 +23,49 @@ import ProfileContent from './components/ProfileContent';
 import Rule from './components/Rule';
 import ProfileModal from './components/ProfileModal';
 import RefereeArena from './components/RefereeArena';
+import LandingPage from './components/LandingPage';
+import RankingsPage from './components/RankingsPage';
+import EventsPage from './components/EventsPage';
+import EventDetailPage from './components/EventDetailPage';
+import RuleDetailPage from './components/RuleDetailPage';
+import BladerProfilePage from './components/BladerProfilePage';
 
 export default function App() {
-  const { user, login, logout, updateUser } = useContext(AuthContext);
+  const { user, login, logout, updateUser, currentPlayer, setPlayer, refreshPlayer } = useContext(AuthContext);
 
   const isValidUser = Boolean(user && user.sub && user.email);
+  const [pathname, setPathname] = useState(window.location.pathname);
+
+  useEffect(() => {
+    const handleRouteChange = () => setPathname(window.location.pathname);
+    window.addEventListener('popstate', handleRouteChange);
+    return () => window.removeEventListener('popstate', handleRouteChange);
+  }, []);
+
+  const getRouteDataPlan = (pathnameToCheck) => {
+    const route = pathnameToCheck.split('?')[0];
+
+    switch (route) {
+      case '/':
+        return ['currentPlayer', 'checkProfile', 'getEvent', 'getEvents', 'getLeaderboard', 'getSettings'];
+      case '/ranking':
+        return ['currentPlayer', 'getLeaderboard'];
+      case '/events':
+        return ['currentPlayer', 'getEvents'];
+      case '/profile':
+        return ['currentPlayer', 'checkProfile', 'getLeaderboard', 'getMyDecks', 'getBeybladeParts'];
+      case '/admin':
+        return ['currentPlayer', 'checkProfile', 'getEvents', 'getRules', 'getLeaderboard'];
+      case '/arena':
+        return ['currentPlayer', 'checkProfile', 'getEvents', 'getLeaderboard'];
+
+      // Public pages own their data fetching. App should not treat an empty
+      // initial request plan as a global failure during a hard refresh.
+      case '/bladers':
+      default:
+        return [];
+    }
+  };
 
   useEffect(() => {
     const root = document.getElementById('root');
@@ -34,22 +76,32 @@ export default function App() {
   }, []);
 
   const [data, setData] = useState({ event: null, participants: [], count: 0, challongeUrl: '' });
+  const [events, setEvents] = useState([]);
   const [leaderboard, setLeaderboard] = useState([]);
   const [blader, setBlader] = useState(null);
   const [settings, setSettings] = useState({});
+  const [rules, setRules] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [isLoadingPublic, setIsLoadingPublic] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isUpdatingPoints, setIsUpdatingPoints] = useState(false);
   const [isOnboarding, setIsOnboarding] = useState(false);
   const [initError, setInitError] = useState(null);
+  const [initStatus, setInitStatus] = useState({});
   const [newNickname, setNewNickname] = useState('');
   const [activeTab, setActiveTab] = useState('arena');
   const [showEventModal, setShowEventModal] = useState(false);
   const [showCancelModal, setShowCancelModal] = useState(false);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [confirmModalData, setConfirmModalData] = useState({ title: '', message: '', confirmLabel: '', isSubmitting: false, variant: 'danger', onConfirm: () => {} });
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [isEditingEvent, setIsEditingEvent] = useState(false);
+  const [editEventInitialData, setEditEventInitialData] = useState({});
   const [modalProfile, setModalProfile] = useState(null);
   const [modalLoading, setModalLoading] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [excludedPlayerIds, setExcludedPlayerIds] = useState([]);
 
   useEffect(() => {
     const onFullscreenChange = () => {
@@ -78,61 +130,285 @@ export default function App() {
   const refreshEvent = async () => {
     try {
       const res = await getFromGas('getEvent');
-      if (res) setData(res);
+      console.log('[EVENT API DATA]', res);
+      if (res && res.status === 'timeout') {
+        console.warn('[API STALE DATA]', { path: 'getEvent', usingPreviousData: true });
+        return { status: 'timeout', message: res.message, data: data };
+      }
+      if (res && res.status === 'error') {
+        console.warn('[API STALE DATA]', { path: 'getEvent', usingPreviousData: true });
+        return { status: 'error', message: res.message, data: data };
+      }
+      if (res) {
+        setData(res);
+      }
+      return { status: 'success', data: res };
     } catch (err) {
       console.error('Gagal fetch event:', err);
+      return { status: 'error', error: err, data: data };
+    }
+  };
+
+  const refreshEvents = async () => {
+    try {
+      const res = await getFromGas('getEvents');
+      console.log('[REFRESH EVENTS]', res);
+      if (res && res.status === 'timeout') {
+        console.warn('[API STALE DATA]', { path: 'getEvents', usingPreviousData: true });
+        return { status: 'timeout', message: res.message, data: events };
+      }
+      if (res && res.status === 'error') {
+        console.warn('[API STALE DATA]', { path: 'getEvents', usingPreviousData: true });
+        return { status: 'error', message: res.message, data: events };
+      }
+      if (Array.isArray(res?.events)) {
+        setEvents(res.events);
+      } else {
+        setEvents([]);
+      }
+      return { status: 'success', data: res };
+    } catch (err) {
+      console.error('Gagal fetch events:', err);
+      return { status: 'error', error: err, data: events };
     }
   };
 
   const refreshLeaderboard = async () => {
     try {
       const res = await getFromGas('getLeaderboard', true);
+      if (res && res.status === 'timeout') {
+        console.warn('[API STALE DATA]', { path: 'getLeaderboard', usingPreviousData: true });
+        return { status: 'timeout', message: res.message, data: leaderboard };
+      }
+      if (res && res.status === 'error') {
+        console.warn('[API STALE DATA]', { path: 'getLeaderboard', usingPreviousData: true });
+        return { status: 'error', message: res.message, data: leaderboard };
+      }
       if (res && Array.isArray(res)) setLeaderboard(res);
+      return { status: 'success', data: res };
     } catch (err) {
       console.error('Gagal fetch leaderboard:', err);
+      return { status: 'error', error: err, data: leaderboard };
+    }
+  };
+
+  const refreshRules = async () => {
+    try {
+      const res = await getFromGas('getRules');
+      if (res && res.status === 'timeout') {
+        console.warn('[API STALE DATA]', { path: 'getRules', usingPreviousData: true });
+        return { status: 'timeout', message: res.message, data: rules };
+      }
+      if (res && res.status === 'error') {
+        console.warn('[API STALE DATA]', { path: 'getRules', usingPreviousData: true });
+        return { status: 'error', message: res.message, data: rules };
+      }
+      if (Array.isArray(res)) setRules(res);
+      return { status: 'success', data: res };
+    } catch (err) {
+      console.error('Gagal fetch rules:', err);
+      return { status: 'error', error: err, data: rules };
     }
   };
 
   const checkProfile = async () => {
     try {
-      const res = await getFromGas(`getBlader&googleId=${user.sub}`);
-      if (res?.registered) {
+      const googleId = user?.sub;
+      const email = user?.email;
+      console.log('[CURRENT PLAYER LOAD]');
+      const res = await getFromGas('getBlader', true, {
+        googleId,
+        email
+      });
+
+      if (res && (res.status === 'timeout' || res.status === 'error')) {
+        console.warn('[API STALE DATA]', { path: 'getBlader', usingPreviousData: true });
+        return { status: res.status, message: res.message, data: blader };
+      }
+
+      if (res?.registered === true) {
         setBlader(res);
         setIsOnboarding(false);
-        if (res.foto) {
-          updateUser({ ...user, picture: res.foto });
+        const photo = res.foto || res.photo;
+        if (photo && photo !== user.picture) {
+          updateUser({ ...user, picture: photo });
         }
-      } else {
+
+        const minimalPlayer = {
+          nickname: res.nickname || '',
+          photoUrl: photo || user.picture || '',
+          role: res.role || 'Blader',
+          publicProfileId: res.public_profile_id || ''
+        };
+        setPlayer(minimalPlayer);
+      } else if (res?.registered === false) {
         setIsOnboarding(true);
+        setPlayer(null);
+      } else if (res?.error) {
+        throw new Error(res.error);
+      } else {
+        throw new Error('Response profile tidak valid');
       }
+      return { status: 'success', data: res };
     } catch (err) {
       console.error('Gagal fetch profile:', err);
-      throw err;
+      return { status: 'error', error: err, data: blader };
     }
   };
 
-  const withTimeout = (promise, ms, label) => {
-    return Promise.race([
-      promise,
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout: '+label+' (> '+ms+'ms)')), ms))
-    ]);
+  const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+  const retryRequest = async (fn, label, maxRetries = 2, baseDelay = 1000, timeoutMs = 8000) => {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const result = await Promise.race([
+          fn(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error(`Timeout: ${label} (> ${timeoutMs}ms)`)), timeoutMs))
+        ]);
+        if (attempt > 0) {
+          console.log(`[API RETRY]`, { path: label, attempt, status: 'success' });
+        }
+        return { status: 'success', data: result };
+      } catch (err) {
+        const isTimeout = err?.code === 'ECONNABORTED' || err?.message?.includes('timeout');
+        const isNetwork = err?.code === 'ERR_NETWORK' || err?.message?.includes('Network Error');
+        const retryable = isTimeout || isNetwork;
+        
+        console.warn(`[API TIMEOUT]`, { 
+          path: label, 
+          attempt, 
+          type: isTimeout ? 'TIMEOUT' : isNetwork ? 'NETWORK_ERROR' : 'APPLICATION_ERROR',
+          retryable 
+        });
+        
+        if (!retryable || attempt === maxRetries) {
+          return { 
+            status: isTimeout ? 'timeout' : 'error', 
+            error: err,
+            message: isTimeout ? `Request timeout untuk ${label}` : `Gagal terhubung ke server (${label})`
+          };
+        }
+        
+        await sleep(baseDelay * Math.pow(2, attempt));
+      }
+    }
+    return { status: 'timeout', message: `Request timeout untuk ${label}` };
   };
 
   const initApp = async () => {
     setLoading(true);
+    setIsLoadingPublic(true);
     setInitError(null);
+    setInitStatus({});
+    
     try {
-      await Promise.all([
-        withTimeout(checkProfile(), 30000, 'checkProfile'),
-        withTimeout(getFromGas('getSettings').then(setSettings), 30000, 'getSettings'),
-        withTimeout(refreshEvent(), 30000, 'refreshEvent'),
-        withTimeout(refreshLeaderboard(), 30000, 'refreshLeaderboard'),
-      ]);
+      const routePlan = getRouteDataPlan(pathname);
+      console.log('[ROUTE DATA PLAN]', { route: pathname, required: routePlan });
+      
+      const fetchPromises = [];
+      const fetchLabels = [];
+
+      // CRITICAL: currentPlayer from cache - don't wait for API
+      if (routePlan.includes('currentPlayer')) {
+        console.log('[API REQUEST START]', { path: 'currentPlayer', route: pathname, source: 'cache' });
+        if (currentPlayer) {
+          console.log('[CURRENT PLAYER CACHE HIT]', currentPlayer);
+        } else {
+          console.log('[CURRENT PLAYER CACHE MISS]', { route: pathname });
+        }
+      }
+
+      // Route-aware data fetching
+      if (routePlan.includes('getEvent')) {
+        fetchPromises.push(retryRequest(() => refreshEvent(), 'getEvent', 2, 1000, 8000));
+        fetchLabels.push('event');
+      }
+      if (routePlan.includes('getEvents')) {
+        fetchPromises.push(retryRequest(() => refreshEvents(), 'getEvents', 2, 1000, 8000));
+        fetchLabels.push('events');
+      }
+      if (routePlan.includes('getLeaderboard')) {
+        fetchPromises.push(retryRequest(() => refreshLeaderboard(), 'getLeaderboard', 2, 1000, 8000));
+        fetchLabels.push('leaderboard');
+      }
+      if (routePlan.includes('getRules')) {
+        fetchPromises.push(retryRequest(() => refreshRules(), 'getRules', 2, 1000, 8000));
+        fetchLabels.push('rules');
+      }
+      if (routePlan.includes('getSettings')) {
+        fetchPromises.push(retryRequest(() => getFromGas('getSettings'), 'getSettings', 2, 1000, 8000));
+        fetchLabels.push('settings');
+      }
+      if (routePlan.includes('checkProfile')) {
+        fetchPromises.push(retryRequest(() => checkProfile(), 'checkProfile', 2, 1000, 8000));
+        fetchLabels.push('profile');
+      }
+
+      // Background retry for non-critical data
+      const backgroundRetries = [];
+      const backgroundLabels = [];
+      if (routePlan.includes('getMyDecks')) {
+        backgroundRetries.push(retryRequest(() => getMyDecks({ filter: 'all', googleId: user?.sub }), 'getMyDecks', 2, 1000, 8000));
+        backgroundLabels.push('getMyDecks');
+      }
+      if (routePlan.includes('getBeybladeParts')) {
+        backgroundRetries.push(retryRequest(() => getBeybladeParts(), 'getBeybladeParts', 2, 1000, 8000));
+      }
+
+      const results = await Promise.allSettled(fetchPromises);
+
+      const statusMap = {};
+      let hasAnySuccess = false;
+      let allFailed = fetchPromises.length > 0;
+
+      results.forEach((result, index) => {
+        const label = fetchLabels[index];
+        
+        if (result.status === 'fulfilled') {
+          hasAnySuccess = true;
+          allFailed = false;
+          statusMap[label] = { status: result.value.status, message: result.value.message };
+        } else {
+          statusMap[label] = { status: 'error', message: result.reason?.message || 'Unknown error' };
+        }
+      });
+
+      setInitStatus(statusMap);
+
+      if (fetchPromises.length === 0) {
+        setInitError(null);
+      } else if (allFailed) {
+        setInitError('Gagal memuat data. Periksa koneksi internet.');
+      } else {
+        setInitError(null);
+      }
+
+      // Fire background retries
+      if (backgroundRetries.length > 0) {
+        Promise.allSettled(backgroundRetries).then(backgroundResults => {
+          backgroundResults.forEach((result, index) => {
+            const label = backgroundLabels[index] || 'unknown';
+            if (result.status === 'fulfilled') {
+              const status = result.value.status;
+              if (status === 'success') {
+                console.log('[BACKGROUND RETRY SUCCESS]', { path: label, status });
+              } else if (status === 'timeout') {
+                console.warn('[BACKGROUND RETRY TIMEOUT]', { path: label, status });
+              } else {
+                console.warn('[BACKGROUND RETRY ERROR]', { path: label, status });
+              }
+            } else {
+              console.warn('[BACKGROUND RETRY ERROR]', { path: label, error: result.reason?.message });
+            }
+          });
+        });
+      }
     } catch (err) {
       console.error('Gagal inisialisasi app:', err);
       setInitError('Gagal memuat data. Periksa koneksi internet.');
     } finally {
       setLoading(false);
+      setIsLoadingPublic(false);
     }
   };
 
@@ -140,14 +416,87 @@ export default function App() {
     await initApp();
   };
 
-  const handleRefresh = async () => {
-    window.location.reload();
+  const retrySpecific = async (label) => {
+    console.log(`[RETRY SPECIFIC]`, { label });
+    let result;
+    switch (label) {
+      case 'profile':
+        result = await retryRequest(() => checkProfile(), 'checkProfile');
+        if (result.status === 'success') setInitStatus(prev => ({ ...prev, profile: { status: 'success' } }));
+        break;
+      case 'settings':
+        result = await retryRequest(() => getFromGas('getSettings'), 'getSettings');
+        if (result.status === 'success') {
+          setSettings(result.data || {});
+          setInitStatus(prev => ({ ...prev, settings: { status: 'success' } }));
+        }
+        break;
+      case 'event':
+        result = await retryRequest(() => refreshEvent(), 'refreshEvent');
+        if (result.status === 'success') setInitStatus(prev => ({ ...prev, event: { status: 'success' } }));
+        break;
+      case 'events':
+        result = await retryRequest(() => refreshEvents(), 'refreshEvents');
+        if (result.status === 'success') setInitStatus(prev => ({ ...prev, events: { status: 'success' } }));
+        break;
+      case 'leaderboard':
+        result = await retryRequest(() => refreshLeaderboard(), 'refreshLeaderboard');
+        if (result.status === 'success') setInitStatus(prev => ({ ...prev, leaderboard: { status: 'success' } }));
+        break;
+      case 'rules':
+        result = await retryRequest(() => refreshRules(), 'refreshRules');
+        if (result.status === 'success') setInitStatus(prev => ({ ...prev, rules: { status: 'success' } }));
+        break;
+    }
+  };
+
+  const fetchPublicData = async () => {
+    setIsLoadingPublic(true);
+    try {
+      const routePlan = getRouteDataPlan(pathname);
+      const publicPromises = [];
+      
+      if (routePlan.includes('getEvent')) {
+        publicPromises.push(retryRequest(() => refreshEvent(), 'refreshEvent', 2, 1000, 8000));
+      }
+      if (routePlan.includes('getEvents')) {
+        publicPromises.push(retryRequest(() => refreshEvents(), 'refreshEvents', 2, 1000, 8000));
+      }
+      if (routePlan.includes('getLeaderboard')) {
+        publicPromises.push(retryRequest(() => refreshLeaderboard(), 'refreshLeaderboard', 2, 1000, 8000));
+      }
+      
+      await Promise.allSettled(publicPromises);
+    } catch (err) {
+      console.error('Gagal fetch data publik:', err);
+    } finally {
+      setIsLoadingPublic(false);
+    }
+  };
+
+  const handleGoogleLogin = async (userData) => {
+    try {
+      await login(userData);
+      toast.success('Login Google berhasil!');
+    } catch (err) {
+      console.error('Google login error:', err);
+      const msg = err?.message || '';
+      if (msg.includes('server_error') || msg.includes('500')) {
+        toast.error('Login Google gagal: Server error. Pastikan localhost di-whitelist di Google Cloud Console.');
+      } else {
+        toast.error('Login Google gagal: ' + msg);
+      }
+    }
   };
 
   useEffect(() => {
-    if (user) initApp();
-    else setLoading(false);
-  }, [user]);
+    if (user) {
+      initApp();
+    } else {
+      setLoading(false);
+      fetchPublicData();
+    }
+  }, [user, pathname]);
 
   const handleCreateProfile = async () => {
     if (newNickname.length < 3 || newNickname.length > 20) return toast.error('Nickname: 3 - 20 karakter!');
@@ -181,64 +530,64 @@ export default function App() {
     setIsSubmitting(false);
   };
 
+  const handleAttendEvent = async (eventId) => {
+    if (!user?.sub || !eventId) return;
+    setIsSubmitting(true);
+    const payload = { eventId, googleId: user.sub, nickname: blader?.nickname || user.name, email: user.email, foto: blader?.photo || user.picture };
+    const res = await postToGas('attendance', payload);
+    if (res?.status === 'success') {
+      toast.success('Ready to Battle!');
+      await Promise.all([refreshEvent(), refreshEvents()]);
+    } else {
+      toast.error(res?.message || 'Gagal mengirim absensi');
+    }
+    setIsSubmitting(false);
+  };
+
   const handleSubmitEvent = async (formData) => {
+    console.log('[ADMIN MUTATION API]', { action: 'createEvent', nama: formData?.nama });
     if (!formData.nama || !formData.lokasi) return toast.error('Isi semua data!');
     setIsSubmitting(true);
     const res = await postToGas('createEvent', formData);
+    console.log('[ADMIN MUTATION RESPONSE]', { action: 'createEvent', status: res?.status });
     if (res?.status === 'success') {
       toast.success('Event Baru Aktif!');
       setShowEventModal(false);
-      refreshEvent();
+      console.log('[ADMIN MUTATION REFRESH]', { action: 'createEvent' });
+      await Promise.all([refreshEvent(), refreshEvents()]);
     } else {
-      toast.error('Gagal terhubung ke server');
+      toast.error(res?.message || 'Gagal terhubung ke server');
     }
     setIsSubmitting(false);
   };
 
   const handleGenerateTournament = async (opts = {}) => {
     const { format = 'weekly', swissRounds } = opts;
+    console.log('[ADMIN MUTATION CLICK]', { action: 'generateTournament', format, swissRounds, eventId: data?.event?.id });
     if (!data?.event?.id) return toast.error('Tidak ada event aktif!');
     setIsGenerating(true);
     try {
       const challongeFormat = format === 'final' ? 'double elimination' : 'swiss';
-      const createRes = await createTournament(data.event.id, challongeFormat, format === 'weekly' ? Number(swissRounds) || 3 : undefined);
-
-      if (createRes?.status !== 'success') {
-        toast.error(createRes?.message || 'Gagal generate turnamen');
-        return;
-      }
-
-      const tournamentUrl = createRes.challongeUrl || data.event?.challongeUrl;
-
-      if (format === 'weekly') {
-        const loadingToast = toast.loading('Mengacak urutan pemain dan membuat bracket...');
-        const randomizeRes = await randomizeParticipants({ tournament_url: tournamentUrl });
-        if (randomizeRes?.status !== 'success') {
-          toast.dismiss(loadingToast);
-          toast.error(randomizeRes?.message || 'Gagal mengacak peserta');
-          return;
-        }
-        const startRes = await startTournament({ tournament_url: tournamentUrl });
-        toast.dismiss(loadingToast);
-        if (startRes?.status === 'success') {
-          toast.success('Turnamen Weekly Dimulai!');
-          refreshEvent();
-        } else {
-          toast.error(startRes?.message || 'Gagal memulai turnamen');
-        }
+      const loadingToast = toast.loading('Sedang membuat tournament, menambahkan peserta, mengacak peserta, dan memulai tournament...');
+      const createRes = await postToGasLongRunning('createTournament', {
+        eventId: data.event.id,
+        format: challongeFormat,
+        swiss_rounds: format === 'weekly' ? Number(swissRounds) || 3 : undefined
+      });
+      toast.dismiss(loadingToast);
+      console.log('[ADMIN MUTATION RESPONSE]', { action: 'generateTournament', status: createRes?.status });
+      if (createRes?.status === 'success') {
+        toast.success(format === 'weekly' ? 'Turnamen Weekly Dimulai!' : 'Turnamen Final Dimulai!');
+        console.log('[ADMIN MUTATION REFRESH]', { action: 'generateTournament' });
+        refreshEvent();
+        refreshEvents();
+      } else if (createRes?.status === 'timeout') {
+        toast.error(createRes?.message || 'Proses mungkin masih berjalan. Jangan klik Generate Bracket lagi.');
       } else {
-        const loadingToast = toast.loading('Membuat bracket Final Double Elim...');
-        const startRes = await startTournament({ tournament_url: tournamentUrl });
-        toast.dismiss(loadingToast);
-        if (startRes?.status === 'success') {
-          toast.success('Turnamen Final Dimulai!');
-          refreshEvent();
-        } else {
-          toast.error(startRes?.message || 'Gagal memulai turnamen');
-        }
+        toast.error(createRes?.message || 'Gagal generate turnamen');
       }
     } catch {
-      toast.error('Gagal generate turnamen');
+      toast.error('Proses mungkin masih berjalan. Jangan klik Generate Bracket lagi.');
     } finally {
       setIsGenerating(false);
     }
@@ -277,7 +626,7 @@ export default function App() {
       toast.success('Bio tersimpan!');
       await checkProfile();
     } else {
-      toast.error(res?.message || 'Gagal simpan bio');
+      toast.error('Gagal simpan bio');
     }
     setIsSubmitting(false);
     return res;
@@ -290,8 +639,7 @@ export default function App() {
       toast.success('Foto profil diupdate!');
       await checkProfile();
       refreshLeaderboard();
-      refreshEvent(); // agar foto di daftar peserta Arena ikut berubah
-      // Update state global user agar foto di navbar (pojok kiri atas) langsung reaktif
+      refreshEvent();
       if (res.photoUrl) updateUser({ ...user, picture: res.photoUrl });
     } else {
       toast.error('Gagal upload foto');
@@ -319,9 +667,177 @@ export default function App() {
       const s = await getFromGas('getSettings');
       if (s) setSettings(s);
     } else {
-      toast.error(res?.message || 'Gagal update pengaturan');
+      toast.error('Gagal update pengaturan');
     }
     setIsSubmitting(false);
+  };
+
+  const handleConfirmAction = async () => {
+    const { onConfirm, isSubmitting: modalSubmitting } = confirmModalData;
+    if (modalSubmitting) return;
+    setConfirmModalData(prev => ({ ...prev, isSubmitting: true }));
+    try {
+      await onConfirm();
+    } finally {
+      setConfirmModalData(prev => ({ ...prev, isSubmitting: false }));
+      setShowConfirmModal(false);
+    }
+  };
+
+  const handleEditEvent = async (formData) => {
+    console.log('[ADMIN MUTATION API]', { action: 'editEvent', eventId: formData?.event_id });
+    setIsEditingEvent(true);
+    try {
+      const res = await updateEvent(formData);
+      console.log('[ADMIN MUTATION RESPONSE]', { action: 'editEvent', status: res?.status });
+      if (res?.status === 'success') {
+        toast.success('Event berhasil diperbarui');
+        setShowEditModal(false);
+        console.log('[ADMIN MUTATION REFRESH]', { action: 'editEvent' });
+        await Promise.all([refreshEvent(), refreshEvents()]);
+      } else {
+        toast.error(res?.message || 'Gagal mengedit event');
+      }
+    } catch {
+      toast.error('Gagal mengedit event');
+    } finally {
+      setIsEditingEvent(false);
+    }
+  };
+
+  const openStartConfirm = (eventId) => {
+    const targetEventId = eventId || data?.event?.id;
+    console.log('[START EVENT CLICK]', {
+      eventId: targetEventId
+    });
+    setConfirmModalData({
+      title: 'Mulai event sekarang?',
+      message: 'Event akan diubah dari UPCOMING menjadi LIVE. Pastikan peserta sudah siap.',
+      confirmLabel: 'Mulai',
+      isSubmitting: false,
+      variant: 'success',
+      onConfirm: async () => {
+        if (!targetEventId) {
+          toast.error('Event tidak ditemukan');
+          throw new Error('Event tidak ditemukan');
+        }
+        const res = await startEvent(targetEventId);
+        console.log('[START EVENT API RESPONSE]', res);
+        if (res?.status === 'success') {
+          toast.success('Event berhasil dimulai.');
+          await Promise.all([refreshEvent(), refreshEvents()]);
+        } else {
+          toast.error(res?.message || 'Gagal memulai event');
+          throw new Error(res?.message || 'Gagal memulai event');
+        }
+      }
+    });
+    setShowConfirmModal(true);
+  };
+
+  const openEndConfirm = (eventId) => {
+    const targetEventId = eventId || data?.event?.id;
+    console.log('[ADMIN MUTATION CLICK]', { action: 'endEvent', eventId: targetEventId });
+    setConfirmModalData({
+      title: 'Akhiri event ini?',
+      message: 'Event akan diubah dari LIVE menjadi COMPLETED. Pastikan tournament sudah selesai.',
+      confirmLabel: 'Akhiri',
+      isSubmitting: false,
+      variant: 'danger',
+      onConfirm: async () => {
+        if (!targetEventId) {
+          toast.error('Event tidak ditemukan');
+          throw new Error('Event tidak ditemukan');
+        }
+        const res = await endEvent(targetEventId);
+        console.log('[ADMIN MUTATION RESPONSE]', { action: 'endEvent', status: res?.status });
+        if (res?.status === 'success') {
+          toast.success('Event berhasil diselesaikan.');
+          console.log('[ADMIN MUTATION REFRESH]', { action: 'endEvent' });
+          await Promise.all([refreshEvent(), refreshEvents()]);
+        } else {
+          toast.error(res?.message || 'Gagal mengakhiri event');
+          throw new Error(res?.message || 'Gagal mengakhiri event');
+        }
+      }
+    });
+    setShowConfirmModal(true);
+  };
+
+  const openStartTournamentConfirm = (eventId) => {
+    const targetEventId = eventId || data?.event?.id;
+    setConfirmModalData({
+      title: 'Mulai tournament?',
+      message: 'Tournament akan diubah dari NOT STARTED menjadi RUNNING. Check-in akan ditutup.',
+      confirmLabel: 'Mulai Tournament',
+      isSubmitting: false,
+      variant: 'success',
+      onConfirm: async () => {
+        if (!targetEventId) {
+          toast.error('Event tidak ditemukan');
+          throw new Error('Event tidak ditemukan');
+        }
+        const res = await startTournamentStatus(targetEventId);
+        console.log('[START TOURNAMENT RESPONSE]', res);
+        if (res?.status === 'success') {
+          toast.success('Tournament berhasil dimulai.');
+          await Promise.all([refreshEvent(), refreshEvents()]);
+        } else {
+          const message = res?.message || res?.error || 'Gagal memulai tournament';
+          toast.error(message);
+          throw new Error(message);
+        }
+      }
+    });
+    setShowConfirmModal(true);
+  };
+
+  const openFinishTournamentConfirm = (eventId) => {
+    const targetEventId = eventId || data?.event?.id;
+    console.log('[ADMIN MUTATION CLICK]', { action: 'finishTournament', eventId: targetEventId });
+    setConfirmModalData({
+      title: 'Finish tournament?',
+      message: 'Status tournament akan berubah menjadi FINISHED. Rekap hasil belum dilakukan.',
+      confirmLabel: 'FINISH TOURNAMENT',
+      isSubmitting: false,
+      loadingMessage: 'Finishing tournament...',
+      loadingSubMessage: 'Sedang mengubah status tournament.',
+      variant: 'warning',
+      onConfirm: async () => {
+        if (!targetEventId) {
+          toast.error('Event tidak ditemukan');
+          throw new Error('Event tidak ditemukan');
+        }
+        const res = await postToGasLongRunning('finishTournament', { eventId: targetEventId });
+        console.log('[ADMIN MUTATION RESPONSE]', { action: 'finishTournament', status: res?.status });
+        if (res?.status === 'success') {
+          toast.success('TOURNAMENT FINISHED');
+          console.log('[ADMIN MUTATION REFRESH]', { action: 'finishTournament' });
+          await Promise.all([refreshEvent(), refreshEvents()]);
+        } else if (res?.status === 'timeout') {
+          toast.error(res?.message || 'Proses mungkin masih berlangsung. Jangan tekan lagi.');
+          throw new Error(res?.message || 'Timeout');
+        } else {
+          const message = res?.message || res?.error || 'Gagal menyelesaikan tournament';
+          toast.error(message);
+          throw new Error(message);
+        }
+      }
+    });
+    setShowConfirmModal(true);
+  };
+
+  const openEditModal = () => {
+    setEditEventInitialData({
+      event_id: data?.event?.id || data?.event?.event_id,
+      id: data?.event?.id || data?.event?.event_id,
+      nama: data?.event?.nama || '',
+      lokasi: data?.event?.lokasi || '',
+      tanggal_event: data?.event?.tanggal_event || '',
+      waktu_event: data?.event?.waktu_event || data?.event?.waktu || '',
+      rule_id: data?.event?.rule_id || ''
+    });
+    setShowEditModal(true);
   };
 
   const openProfile = (player) => {
@@ -373,7 +889,7 @@ export default function App() {
     );
   }
 
-  if (initError && isValidUser) {
+  if (initError && isValidUser && Object.keys(initStatus).length === 0) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-dark-bg p-6 text-center dark:text-white">
         <div className="w-full max-sm bg-white dark:bg-dark-card p-10 rounded-[2.5rem] shadow-xl border border-gray-100 dark:border-gray-800">
@@ -390,72 +906,40 @@ export default function App() {
     );
   }
 
-  if (!isValidUser) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-dark-bg p-6 text-center dark:text-white">
-        <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="w-full max-sm bg-white dark:bg-dark-card p-10 rounded-[2.5rem] shadow-xl border border-gray-100 dark:border-gray-800 dark:text-white">
-          <Trophy className="text-primary mx-auto mb-4 dark:text-white" size={48} />
-          <h1 className="text-3xl font-black text-primary mb-2 italic uppercase tracking-tighter dark:text-white">Lalapan Beyblade X lamongan</h1>
-          <p className="text-gray-400 text-[10px] mb-8 font-black uppercase tracking-[0.3em] italic leading-tight dark:text-white">Blader Identity Presence</p>
-          <div className="flex flex-col items-center gap-3">
-            <GoogleSignInButton
-              onLogin={async (userData) => {
-                try {
-                  await login(userData);
-                  toast.success('Login Google berhasil!');
-                } catch (err) {
-                  console.error('Google login error:', err);
-                  const msg = err?.message || '';
-                  if (msg.includes('server_error') || msg.includes('500')) {
-                    toast.error('Login Google gagal: Server error. Pastikan localhost di-whitelist di Google Cloud Console.');
-                  } else {
-                    toast.error('Login Google gagal: ' + msg);
-                  }
-                }
-              }}
-            />
-          </div>
-        </motion.div>
-      </div>
-    );
-  }
+  const MainApp = () => {
+    const navigate = useNavigate();
+    
+    const failedSections = Object.entries(initStatus)
+      .filter(([_, status]) => status && status.status && status.status !== 'success')
+      .map(([label, _]) => label);
 
-  if (isOnboarding) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-dark-bg p-6 text-center dark:text-white">
-        <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className="max-w-sm w-full bg-white dark:bg-dark-card p-8 rounded-[2.5rem] shadow-2xl border border-gray-100 dark:border-gray-800">
-          <UserCircle size={48} className="mx-auto text-primary mb-2" />
-          <h2 className="text-2xl font-black text-gray-900 dark:text-white uppercase italic tracking-tighter">New Blader</h2>
-          <p className="text-[10px] text-gray-500 dark:text-gray-400 font-black uppercase tracking-widest mb-8">Apa nickname Battle-mu?</p>
-          <div className="space-y-6">
-            <input
-              type="text"
-              value={newNickname}
-              onChange={(e) => setNewNickname(e.target.value.replace(/[^a-zA-Z0-9_\s]/g, '').replace(/\s{2,}/g, ' '))}
-              placeholder="Ex: Mail Basikal"
-              className="w-full p-4 bg-gray-100 dark:bg-gray-800 rounded-2xl font-black text-center text-gray-900 dark:text-white border-2 border-transparent focus:border-primary outline-none transition-all"
-            />
-            <button
-              type="button"
-              onClick={handleCreateProfile}
-              disabled={isSubmitting || newNickname.length < 3}
-              className="w-full bg-primary dark:text-white py-4 rounded-2xl font-black shadow-lg shadow-primary/30 uppercase italic tracking-widest disabled:opacity-50 active:scale-95 transition-all"
-            >
-              {isSubmitting ? 'Registering...' : 'Start Journey'}
-            </button>
-          </div>
-        </motion.div>
-      </div>
-    );
-  }
-
-  return (
     <div className="min-h-screen bg-gray-50 dark:bg-dark-bg transition-colors duration-500 pb-28 pt-[max(env(safe-area-inset-top),1.5rem)] dark:text-white overflow-y-auto">
+      {failedSections.length > 0 && (
+        <div className="mx-6 mt-4 mb-2 p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-2xl">
+          <p className="text-yellow-400 font-black text-xs uppercase tracking-widest mb-2">
+            Beberapa data belum dapat diperbarui. Data terakhir tetap ditampilkan.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {failedSections.map(section => (
+              <button
+                key={section}
+                type="button"
+                onClick={() => retrySpecific(section)}
+                className="px-3 py-1.5 bg-yellow-500/20 text-yellow-300 rounded-lg font-black text-[10px] uppercase tracking-widest hover:bg-yellow-500/30 transition-colors"
+              >
+                Retry {section}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <CreateEventModal
         show={showEventModal}
         onClose={() => setShowEventModal(false)}
         onSubmit={handleSubmitEvent}
         isSubmitting={isSubmitting}
+        rules={rules}
       />
       <CancelModal
         show={showCancelModal}
@@ -465,6 +949,24 @@ export default function App() {
           handleCancelAttend();
         }}
         isSubmitting={isSubmitting}
+      />
+      <ConfirmModal
+        show={showConfirmModal}
+        onClose={() => setShowConfirmModal(false)}
+        onConfirm={handleConfirmAction}
+        title={confirmModalData.title}
+        message={confirmModalData.message}
+        confirmLabel={confirmModalData.confirmLabel}
+        isSubmitting={confirmModalData.isSubmitting}
+        variant={confirmModalData.variant}
+      />
+      <EditEventModal
+        show={showEditModal}
+        onClose={() => setShowEditModal(false)}
+        onSubmit={handleEditEvent}
+        isSubmitting={isEditingEvent}
+        initialData={editEventInitialData}
+        rules={rules}
       />
       <ProfileModal player={modalProfile} loading={modalLoading} onClose={closeProfile} />
       <Toaster position="top-center" />
@@ -495,7 +997,13 @@ export default function App() {
       <PullToRefresh onRefresh={handleRefresh}>
         <main className="w-full max-w-md md:max-w-3xl lg:max-w-5xl mx-auto px-4 dark:text-white">
           {activeTab === 'referee' ? (
-            <RefereeArena key="referee" masterPlayers={leaderboard} />
+            <RefereeArena 
+              key="referee" 
+              masterPlayers={leaderboard}
+              events={events}
+              externalExcludedPlayerIds={excludedPlayerIds}
+              onExcludedPlayersChange={setExcludedPlayerIds}
+            />
           ) : (
             <AnimatePresence mode="wait">
               {activeTab === 'arena' ? (
@@ -509,6 +1017,7 @@ export default function App() {
                     onCancel={() => setShowCancelModal(true)}
                     isSubmitting={isSubmitting}
                     challongeUrl={data.event?.challongeUrl}
+                    eventStatus={data.event?.status}
                   />
                   {data?.event && <ParticipantList participants={data.participants} onSelect={openProfile} />}
                 </motion.div>
@@ -529,6 +1038,13 @@ export default function App() {
                   isGenerating={isGenerating}
                   isUpdatingPoints={isUpdatingPoints}
                   eventId={data?.event?.id}
+                  currentEvent={data?.event}
+                  events={events}
+                  onRefreshEvent={refreshEvent}
+                  onStartEvent={openStartConfirm}
+                  onEndEvent={openEndConfirm}
+                  onFinishTournament={openFinishTournamentConfirm}
+                  onEditEvent={openEditModal}
                 />
               ) : (
                 <ProfileContent
@@ -549,29 +1065,214 @@ export default function App() {
       </PullToRefresh>
 
       <nav className="fixed bottom-6 left-1/2 -translate-x-1/2 w-[92%] max-w-md md:max-w-3xl lg:max-w-5xl bg-white/80 dark:bg-dark-card/80 backdrop-blur-2xl border border-white/20 dark:border-gray-800 rounded-[2.5rem] p-2 shadow-2xl flex justify-between items-center z-50 dark:text-white">
-        <button type="button" onClick={() => setActiveTab('arena')} className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${activeTab === 'arena' ? 'bg-primary dark:text-white shadow-lg' : 'text-gray-400'}`}>
+        <button type="button" onClick={() => navigate('/arena')} className="flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all text-gray-400 hover:text-white">
           <MapPin size={18} /><span className="text-[8px] font-black uppercase italic tracking-tighter leading-none">Arena</span>
         </button>
-        <button type="button" onClick={() => setActiveTab('standings')} className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${activeTab === 'standings' ? 'bg-primary dark:text-white shadow-lg' : 'text-gray-400'}`}>
+        <button type="button" onClick={() => navigate('/')} className="flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all text-gray-400 hover:text-white">
           <Trophy size={18} /><span className="text-[8px] font-black uppercase italic tracking-tighter leading-none">Standings</span>
         </button>
-        <button type="button" onClick={() => setActiveTab('rule')} className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${activeTab === 'rule' ? 'bg-primary dark:text-white shadow-lg' : 'text-gray-400'}`}>
+        <button type="button" onClick={() => navigate('/')} className="flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all text-gray-400 hover:text-white">
           <BookOpen size={18} /><span className="text-[8px] font-black uppercase italic tracking-tighter leading-none">Rule</span>
         </button>
         {blader?.role === 'Admin' && (
           <>
-            <button type="button" onClick={() => setActiveTab('admin')} className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${activeTab === 'admin' ? 'bg-red-500 dark:text-white shadow-lg shadow-red-500/30' : 'text-gray-400'}`}>
+            <button type="button" onClick={() => navigate('/admin')} className="flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all text-gray-400 hover:text-white">
               <ShieldCheck size={18} /><span className="text-[8px] font-black uppercase italic tracking-tighter leading-none">Admin</span>
             </button>
-            <button type="button" onClick={() => setActiveTab('referee')} className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${activeTab === 'referee' ? 'bg-blue-500 dark:text-white shadow-lg shadow-blue-500/30' : 'text-gray-400'}`}>
+            <button type="button" onClick={() => navigate('/arena')} className="flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all text-gray-400 hover:text-white">
               <Swords size={18} /><span className="text-[8px] font-black uppercase italic tracking-tighter leading-none">Referee</span>
             </button>
           </>
         )}
-        <button type="button" onClick={() => setActiveTab('profile')} className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${activeTab === 'profile' ? 'bg-primary dark:text-white shadow-lg' : 'text-gray-400'}`}>
+        <button type="button" onClick={() => navigate('/profile')} className="flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all text-gray-400 hover:text-white">
           <UserCircle size={18} /><span className="text-[8px] font-black uppercase italic tracking-tighter leading-none">Profile</span>
         </button>
       </nav>
     </div>
+   );
+  };
+
+  return (
+    <>
+      <CreateEventModal
+        show={showEventModal}
+        onClose={() => setShowEventModal(false)}
+        onSubmit={handleSubmitEvent}
+        isSubmitting={isSubmitting}
+        rules={rules}
+      />
+      <CancelModal
+        show={showCancelModal}
+        onClose={() => setShowCancelModal(false)}
+        onConfirm={() => {
+          setShowCancelModal(false);
+          handleCancelAttend();
+        }}
+        isSubmitting={isSubmitting}
+      />
+      <ConfirmModal
+        show={showConfirmModal}
+        onClose={() => setShowConfirmModal(false)}
+        onConfirm={handleConfirmAction}
+        title={confirmModalData.title}
+        message={confirmModalData.message}
+        confirmLabel={confirmModalData.confirmLabel}
+        isSubmitting={confirmModalData.isSubmitting}
+        variant={confirmModalData.variant}
+      />
+      <EditEventModal
+        show={showEditModal}
+        onClose={() => setShowEditModal(false)}
+        onSubmit={handleEditEvent}
+        isSubmitting={isEditingEvent}
+        initialData={editEventInitialData}
+        rules={rules}
+      />
+      <ProfileModal player={modalProfile} loading={modalLoading} onClose={closeProfile} />
+      <Toaster position="top-center" />
+      <Router>
+      <Routes>
+        <Route
+          path="/"
+          element={
+            isValidUser && isOnboarding ? (
+              <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-dark-bg p-6 text-center dark:text-white">
+                <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className="max-w-sm w-full bg-white dark:bg-dark-card p-8 rounded-[2.5rem] shadow-2xl border border-gray-100 dark:border-gray-800">
+                  <UserCircle size={48} className="mx-auto text-primary mb-2" />
+                  <h2 className="text-2xl font-black text-gray-900 dark:text-white uppercase italic tracking-tighter">New Blader</h2>
+                  <p className="text-[10px] text-gray-500 dark:text-gray-400 font-black uppercase tracking-widest mb-8">Apa nickname Battle-mu?</p>
+                  <div className="space-y-6">
+                    <input
+                      type="text"
+                      value={newNickname}
+                      onChange={(e) => setNewNickname(e.target.value.replace(/[^a-zA-Z0-9_\s]/g, '').replace(/\s{2,}/g, ' '))}
+                      placeholder="Ex: Mail Basikal"
+                      className="w-full p-4 bg-gray-100 dark:bg-gray-800 rounded-2xl font-black text-center text-gray-900 dark:text-white border-2 border-transparent focus:border-primary outline-none transition-all"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleCreateProfile}
+                      disabled={isSubmitting || newNickname.length < 3}
+                      className="w-full bg-primary dark:text-white py-4 rounded-2xl font-black shadow-lg shadow-primary/30 uppercase italic tracking-widest disabled:opacity-50 active:scale-95 transition-all"
+                    >
+                      {isSubmitting ? 'Registering...' : 'Start Journey'}
+                    </button>
+                  </div>
+                </motion.div>
+              </div>
+            ) : (
+              <LandingPage
+                leaderboard={leaderboard}
+                currentEvent={data.event}
+                isLoadingPublic={isLoadingPublic}
+                onGoogleLogin={handleGoogleLogin}
+              />
+            )
+          }
+        />
+        <Route
+          path="/ranking"
+          element={
+            <RankingsPage
+              leaderboard={leaderboard}
+              currentUser={user}
+            />
+          }
+        />
+        <Route
+          path="/bladers"
+          element={<BladersPage />}
+        />
+        <Route
+          path="/bladers/:profileId"
+          element={<BladerProfilePage />}
+        />
+        <Route
+          path="/events"
+          element={
+            <EventsPage
+              currentEvent={data.event}
+              events={events}
+            />
+          }
+        />
+        <Route
+          path="/events/:id"
+          element={<EventDetailPage />}
+        />
+        <Route
+          path="/rules/:id"
+          element={<RuleDetailPage />}
+        />
+        <Route
+          path="/profile"
+          element={
+            isValidUser ? (
+              <ProfileContent
+                blader={blader}
+                user={user}
+                settings={settings}
+                leaderboard={leaderboard}
+                onUpdateNickname={handleUpdateNickname}
+                onUpdateBio={handleUpdateBio}
+                onUploadPhoto={handleUploadPhoto}
+                isSubmitting={isSubmitting}
+              />
+            ) : (
+              <Navigate to="/" replace />
+            )
+          }
+        />
+        <Route
+          path="/admin"
+          element={
+            String(blader?.role || '').toLowerCase() === 'admin' ? (
+              <AdminContent
+                key="admin"
+                onCreateEvent={() => setShowEventModal(true)}
+                onGenerateTournament={handleGenerateTournament}
+                onUpdatePoints={handleUpdatePoints}
+                onToggleNickname={handleToggleNickname}
+                nicknameAllowed={settings.allow_nickname_change === true || settings.allow_nickname_change === 'true'}
+                leaderboard={leaderboard}
+                rules={rules}
+                onRefreshRules={refreshRules}
+                isSubmitting={isSubmitting}
+                isGenerating={isGenerating}
+                isUpdatingPoints={isUpdatingPoints}
+                eventId={data?.event?.id}
+                currentEvent={data?.event}
+                events={events}
+                onRefreshEvent={refreshEvent}
+                onStartEvent={openStartConfirm}
+                onEndEvent={openEndConfirm}
+                onFinishTournament={openFinishTournamentConfirm}
+                onEditEvent={handleEditEvent}
+              />
+            ) : (
+              <Navigate to="/" replace />
+            )
+          }
+        />
+        <Route
+          path="/arena"
+          element={
+            isValidUser ? (
+              <RefereeArena
+                key="referee"
+                masterPlayers={leaderboard}
+                events={events}
+                externalExcludedPlayerIds={excludedPlayerIds}
+                onExcludedPlayersChange={setExcludedPlayerIds}
+              />
+            ) : (
+              <Navigate to="/" replace />
+            )
+          }
+        />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </Router>
+    </>
   );
 }

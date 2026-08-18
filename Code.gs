@@ -5,6 +5,508 @@ function res(data) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
+// --- HELPERS ---
+
+function getHeaderMap(sheet) {
+  const headers = sheet.getDataRange().getValues()[0] || [];
+  const map = {};
+  headers.forEach((h, i) => {
+    map[String(h).toLowerCase().trim()] = i;
+  });
+  return map;
+}
+
+function getOrCreateSheet(sheetName, headers) {
+  let sheet = SS.getSheetByName(sheetName);
+  if (!sheet) {
+    sheet = SS.insertSheet(sheetName);
+    if (headers && headers.length > 0) {
+      sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    }
+  }
+  return sheet;
+}
+
+function normalizeId(value) {
+  return String(value ?? '').trim();
+}
+
+function normalizeKey(value) {
+  return String(value ?? '').trim().toLowerCase();
+}
+
+function getTournamentParticipantMapping(eventId, tournamentId) {
+  try {
+    const mappingSheet = SS.getSheetByName('TournamentParticipants');
+    if (!mappingSheet) return {};
+
+    const mappingValues = mappingSheet.getDataRange().getValues();
+    if (mappingValues.length < 2) return {};
+
+    const mappingHeaders = mappingValues[0];
+    const mappingRows = mappingValues.slice(1);
+    const mappingMap = {};
+    mappingHeaders.forEach((h, i) => {
+      mappingMap[String(h).toLowerCase().trim()] = i;
+    });
+
+    const mapEventIdCol = mappingMap['event_id'];
+    const mapTournamentIdCol = mappingMap['tournament_id'];
+    const mapParticipantIdCol = mappingMap['challonge_participant_id'];
+    const mapGoogleIdCol = mappingMap['google_id'];
+
+    if (mapEventIdCol === undefined || mapParticipantIdCol === undefined || mapGoogleIdCol === undefined) {
+      return {};
+    }
+
+    const participantMap = {};
+    mappingRows.forEach(row => {
+      const rid = normalizeKey(row[mapEventIdCol]);
+      const rtid = mapTournamentIdCol !== undefined ? normalizeId(row[mapTournamentIdCol]) : '';
+      const rpid = normalizeId(row[mapParticipantIdCol]);
+      const rgid = normalizeId(row[mapGoogleIdCol]);
+
+      const eventMatch = rid && rid === normalizeKey(eventId);
+      const tournamentMatch = rtid && normalizeId(tournamentId) && rtid === normalizeId(tournamentId);
+
+      if ((eventMatch || tournamentMatch) && rpid && rgid) {
+        participantMap[rpid] = rgid;
+      }
+    });
+
+    return participantMap;
+  } catch (err) {
+    console.error('getTournamentParticipantMapping error: ' + err.message);
+    return {};
+  }
+}
+
+function saveTournamentParticipantMapping(eventId, tournamentId, participants) {
+  try {
+    const mappingSheet = getOrCreateSheet('TournamentParticipants', [
+      'challonge_participant_id',
+      'event_id',
+      'tournament_id',
+      'google_id',
+      'nickname',
+      'created_at'
+    ]);
+
+    const values = mappingSheet.getDataRange().getValues();
+    const existingKeys = new Set();
+    for (let i = 1; i < values.length; i++) {
+      const row = values[i];
+      const key = String(row[0] || '') + '|' + String(row[1] || '');
+      existingKeys.add(key);
+    }
+
+    const now = new Date();
+    let inserted = 0;
+    const rowsToAppend = [];
+
+    (participants || []).forEach(p => {
+      const challongeId = String(p.challongeParticipantId || '').trim();
+      const gId = String(p.googleId || '').trim();
+      const nick = String(p.nickname || p.nama || '').trim();
+      if (!challongeId || !gId) return;
+
+      const key = challongeId + '|' + eventId;
+      if (existingKeys.has(key)) return;
+
+      rowsToAppend.push([
+        challongeId,
+        eventId,
+        tournamentId || '',
+        gId,
+        nick,
+        now
+      ]);
+      existingKeys.add(key);
+      inserted++;
+    });
+
+    if (rowsToAppend.length > 0) {
+      mappingSheet.getRange(mappingSheet.getLastRow() + 1, 1, rowsToAppend.length, rowsToAppend[0].length).setValues(rowsToAppend);
+    }
+
+    return { status: 'success', inserted };
+  } catch (err) {
+    console.error('saveTournamentParticipantMapping error: ' + err.message);
+    return { status: 'error', message: err.message };
+  }
+}
+
+function repairTournamentParticipantMapping(data) {
+  try {
+    const eventId = String(data.eventId || '').trim();
+    const tournamentId = String(data.tournamentId || '').trim();
+    if (!eventId) return res({ status: 'error', message: 'eventId wajib diisi' });
+    if (!tournamentId) return res({ status: 'error', message: 'tournamentId wajib diisi' });
+
+    const participantsUrl = 'https://api.challonge.com/v2.1/tournaments/' + tournamentId + '/participants.json';
+    const participantsRes = challongeFetch('get', participantsUrl, undefined, 'v2.1');
+    if (participantsRes.__error) {
+      return res({ status: 'error', message: 'Gagal fetch participants dari Challonge (HTTP ' + participantsRes.code + '): ' + participantsRes.text });
+    }
+
+    const participantsRaw = Array.isArray(participantsRes.data) ? participantsRes.data : (Array.isArray(participantsRes) ? participantsRes : []);
+    const challengers = participantsRaw.map(p => {
+      const participant = p.participant || p;
+      const attr = participant.attributes || participant;
+      return {
+        id: String(participant.id || ''),
+        name: String(attr.name || ('Player ' + participant.id)).trim()
+      };
+    }).filter(p => p.id && p.name);
+
+    const attendanceSheet = SS.getSheetByName('Attendance');
+    let attendanceByNickname = {};
+    if (attendanceSheet) {
+      const attendanceValues = attendanceSheet.getDataRange().getDisplayValues();
+      if (attendanceValues.length >= 2) {
+        const attendanceHeaders = attendanceValues[0];
+        const attendanceRows = attendanceValues.slice(1);
+        const attendanceMap = {};
+        attendanceHeaders.forEach((h, i) => {
+          attendanceMap[String(h).toLowerCase().trim()] = i;
+        });
+        const attendanceEventIdCol = attendanceMap['event id'] !== undefined ? attendanceMap['event id'] : attendanceMap['eventid'];
+        const attendanceGoogleIdCol = attendanceMap['google id'] !== undefined ? attendanceMap['google id'] : attendanceMap['googleid'];
+        const attendanceNicknameCol = attendanceMap['nickname'];
+
+        if (attendanceEventIdCol !== undefined && attendanceGoogleIdCol !== undefined && attendanceNicknameCol !== undefined) {
+          attendanceRows.forEach(row => {
+            const rowEventId = String(row[attendanceEventIdCol] || '').trim();
+            if (rowEventId !== eventId) return;
+            const gId = String(row[attendanceGoogleIdCol] || '').trim();
+            const nick = String(row[attendanceNicknameCol] || '').trim();
+            if (!gId || !nick) return;
+            const key = nick.toLowerCase();
+            if (!attendanceByNickname[key]) {
+              attendanceByNickname[key] = [];
+            }
+            attendanceByNickname[key].push({ googleId: gId, nickname: nick });
+          });
+        }
+      }
+    }
+
+    const mappingSheet = getOrCreateSheet('TournamentParticipants', [
+      'challonge_participant_id',
+      'event_id',
+      'tournament_id',
+      'google_id',
+      'nickname',
+      'created_at'
+    ]);
+
+    const mappingValues = mappingSheet.getDataRange().getValues();
+    const existingRows = mappingValues.slice(1);
+    const existingKeys = new Set();
+    const existingByParticipantId = {};
+    existingRows.forEach((row, index) => {
+      const key = String(row[0] || '') + '|' + String(row[1] || '');
+      existingKeys.add(key);
+      const pid = String(row[0] || '').trim();
+      if (pid) {
+        existingByParticipantId[pid] = {
+          rowIndex: index,
+          googleId: String(row[3] || '').trim(),
+          nickname: String(row[4] || '').trim()
+        };
+      }
+    });
+
+    const now = new Date();
+    let created = 0;
+    let updated = 0;
+    let alreadyMapped = 0;
+    const mapped = [];
+    const warnings = [];
+    const rowsToAppend = [];
+    const rowsToUpdate = [];
+
+    challengers.forEach(c => {
+      const key = c.id + '|' + eventId;
+      if (existingKeys.has(key)) {
+        alreadyMapped++;
+        const existing = existingByParticipantId[c.id];
+        if (existing && !existing.googleId) {
+          const normName = c.name.toLowerCase();
+          const attendanceMatches = attendanceByNickname[normName];
+          if (attendanceMatches && attendanceMatches.length === 1) {
+            const googleId = attendanceMatches[0].googleId;
+            rowsToUpdate.push({
+              rowIndex: existing.rowIndex,
+              googleId: googleId,
+              nickname: c.name
+            });
+            updated++;
+            mapped.push({
+              challongeParticipantId: c.id,
+              nickname: c.name,
+              googleId: googleId
+            });
+          }
+        }
+        return;
+      }
+
+      const normName = c.name.toLowerCase();
+      const attendanceMatches = attendanceByNickname[normName];
+
+      if (!attendanceMatches) {
+        warnings.push({
+          type: 'no_match',
+          message: 'Participant tidak ditemukan di Attendance: ' + c.name + ' (Challonge ID: ' + c.id + ')'
+        });
+        return;
+      }
+
+      if (attendanceMatches.length > 1) {
+        warnings.push({
+          type: 'ambiguous',
+          message: 'Ambiguous participant: ' + c.name + ' cocok dengan ' + attendanceMatches.length + ' attendance records: ' + attendanceMatches.map(a => a.googleId).join(', ')
+        });
+        return;
+      }
+
+      const googleId = attendanceMatches[0].googleId;
+      rowsToAppend.push([
+        c.id,
+        eventId,
+        tournamentId,
+        googleId,
+        c.name,
+        now
+      ]);
+      existingKeys.add(key);
+      created++;
+      mapped.push({
+        challongeParticipantId: c.id,
+        nickname: c.name,
+        googleId: googleId
+      });
+    });
+
+    if (rowsToAppend.length > 0) {
+      mappingSheet.getRange(mappingSheet.getLastRow() + 1, 1, rowsToAppend.length, rowsToAppend[0].length).setValues(rowsToAppend);
+    }
+
+    rowsToUpdate.forEach(update => {
+      const sheetRow = update.rowIndex + 2;
+      mappingSheet.getRange(sheetRow, 4).setValue(update.googleId);
+      mappingSheet.getRange(sheetRow, 5).setValue(update.nickname);
+    });
+
+    return res({
+      status: 'success',
+      eventId: eventId,
+      tournamentId: tournamentId,
+      created: created,
+      updated: updated,
+      alreadyMapped: alreadyMapped,
+      mapped: mapped,
+      warnings: warnings
+    });
+  } catch (err) {
+    console.error('repairTournamentParticipantMapping error: ' + err.message);
+    return res({ status: 'error', message: 'Gagal repair mapping: ' + err.message });
+  }
+}
+
+function parseWaktuString(waktu) {
+  if (!waktu || typeof waktu !== 'string') {
+    return { tanggal_event: '', waktu_event: '' };
+  }
+
+  const trimmed = waktu.trim();
+  const zonaMatch = trimmed.match(/\b(WIB|WITA|WIT)\b/i);
+  const zona = zonaMatch ? zonaMatch[1].toUpperCase() : '';
+
+  const timeMatch = trimmed.match(/(\d{1,2}:\d{2})\s*(?:([AP]M)?\s*)?/i);
+  let waktu_event = '';
+  if (timeMatch) {
+    let hours = Number(timeMatch[1].split(':')[0]);
+    const minutes = timeMatch[1].split(':')[1];
+    if (timeMatch[2] && timeMatch[2].toUpperCase() === 'PM' && hours < 12) hours += 12;
+    if (timeMatch[2] && timeMatch[2].toUpperCase() === 'AM' && hours === 12) hours = 0;
+    waktu_event = String(hours).padStart(2, '0') + ':' + minutes + (zona ? ' ' + zona : '');
+  }
+
+  const bulanMap = {
+    'januari': '01', 'februari': '02', 'maret': '03', 'april': '04',
+    'mei': '05', 'juni': '06', 'juli': '07', 'agustus': '08',
+    'september': '09', 'oktober': '10', 'november': '11', 'desember': '12'
+  };
+
+  const dateMatch = trimmed.match(/(\d{1,2})\s+(Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember)\s+(\d{4})/i);
+  let tanggal_event = '';
+  if (dateMatch && bulanMap[dateMatch[2].toLowerCase()]) {
+    const day = String(dateMatch[1]).padStart(2, '0');
+    const month = bulanMap[dateMatch[2].toLowerCase()];
+    const year = dateMatch[3];
+    tanggal_event = year + '-' + month + '-' + day;
+  }
+
+  return { tanggal_event, waktu_event };
+}
+
+function generateEventId() {
+  const sheet = SS.getSheetByName("Events");
+  if (!sheet) return "E1";
+  const rows = sheet.getDataRange().getValues();
+  let maxNum = 0;
+  for (let i = 1; i < rows.length; i++) {
+    const raw = String(rows[i][0] || '');
+    const match = raw.match(/^E(\d+)$/i);
+    if (match) {
+      const num = parseInt(match[1], 10);
+      if (num > maxNum) maxNum = num;
+    }
+  }
+  return "E" + (maxNum + 1);
+}
+
+function migrateEventsToNewSchema() {
+  const sheet = SS.getSheetByName("Events");
+  if (!sheet) return res({ status: 'error', message: 'Sheet Events tidak ditemukan' });
+
+  const data = sheet.getDataRange().getValues();
+  if (data.length < 2) return res({ status: 'error', message: 'Sheet Events kosong' });
+
+  const oldHeaders = data[0];
+  const oldRows = data.slice(1);
+
+  if (oldHeaders.length < 10) {
+    return res({ status: 'error', message: 'Header Events tidak sesuai ekspektasi (min 10 kolom)' });
+  }
+
+  const newHeaders = [
+    'event_id', 'nama', 'tanggal_buat', 'lokasi', 'status',
+    'challonge_id', 'challonge_url', 'challonge_state', 'created_at',
+    'tanggal_event', 'waktu_event', 'rule_id', 'tournament_status'
+  ];
+
+  const newRows = [];
+  let warnings = 0;
+  let errors = 0;
+  const warningsList = [];
+  const seenIds = {};
+
+  for (let i = 0; i < oldRows.length; i++) {
+    const oldRow = oldRows[i];
+    const eventId = String(oldRow[0] || '').trim();
+
+    if (!eventId) {
+      errors++;
+      warningsList.push('Row ' + (i + 2) + ': event_id kosong');
+      continue;
+    }
+
+    if (seenIds[eventId]) {
+      errors++;
+      warningsList.push('Duplicate event_id: ' + eventId);
+    }
+    seenIds[eventId] = true;
+
+    const nama = String(oldRow[1] || '').trim();
+    const tanggal_buat = oldRow[2];
+    const lokasi = String(oldRow[3] || '').trim();
+    const status = String(oldRow[4] || '').toLowerCase().trim();
+    const challonge_id = String(oldRow[5] || '').trim();
+    const challonge_url = String(oldRow[6] || '').trim();
+    const challonge_state = String(oldRow[7] || '').trim();
+    const created_at = String(oldRow[8] || '').trim();
+    const waktu = String(oldRow[9] || '').trim();
+
+    const parsed = parseWaktuString(waktu);
+
+    let tanggal_event = parsed.tanggal_event;
+    let waktu_event = parsed.waktu_event;
+
+    if (!tanggal_event && waktu) {
+      warnings++;
+      warningsList.push('Row ' + (i + 2) + ' (' + eventId + '): gagal parse waktu "' + waktu + '"');
+    }
+
+    newRows.push([
+      eventId,
+      nama,
+      tanggal_buat,
+      lokasi,
+      status,
+      challonge_id,
+      challonge_url,
+      challonge_state,
+      created_at,
+      tanggal_event,
+      waktu_event,
+      ruleId || '',
+      'not_started'
+    ]);
+  }
+
+  if (errors > 0) {
+    return res({
+      status: 'error',
+      message: 'Migration dihentikan karena ada error',
+      errors: errors,
+      warningsList: warningsList
+    });
+  }
+
+  sheet.getRange(1, 1, 1, newHeaders.length).setValues([newHeaders]);
+
+  if (oldHeaders.length > 12) {
+    sheet.getRange(2, 13, oldRows.length, oldHeaders.length - 12).clearContent();
+  }
+
+  if (newRows.length > 0) {
+    sheet.getRange(2, 1, newRows.length, newHeaders.length).setValues(newRows);
+  }
+
+  return res({
+    status: 'success',
+    message: 'Migration completed',
+    migrated: oldRows.length,
+    success: newRows.length,
+    warnings: warnings,
+    errors: errors,
+    warningsList: warningsList
+  });
+}
+
+function backupEventAndSettings() {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const eventSheet = ss.getSheetByName("Events");
+    const settingsSheet = ss.getSheetByName("Settings");
+
+    if (!eventSheet || !settingsSheet) {
+      return res({ status: 'error', message: 'Sheet Events atau Settings tidak ditemukan' });
+    }
+
+    const timestamp = new Date();
+    const timeStr = Utilities.formatDate(timestamp, Session.getScriptTimeZone(), 'yyyyMMdd_HHmmss');
+
+    const backupEventName = 'Events_backup_' + timeStr;
+    const backupSettingsName = 'Settings_backup_' + timeStr;
+
+    eventSheet.copyTo(ss).setName(backupEventName);
+    settingsSheet.copyTo(ss).setName(backupSettingsName);
+
+    return res({
+      status: 'success',
+      message: 'Backup berhasil',
+      backupEventSheet: backupEventName,
+      backupSettingsSheet: backupSettingsName
+    });
+  } catch (err) {
+    return res({ status: 'error', message: 'Gagal backup: ' + err.message });
+  }
+}
+
 function doGet(e) {
   e = e || {};
   e.parameter = e.parameter || {};
@@ -16,13 +518,21 @@ function doGet(e) {
     switch (path) {
       case 'test': return res({ status: 'ok', message: 'GAS connected' });
       case 'getBlader': return getBlader(googleId);
+      case 'getBladers': return getBladers();
       case 'checkNickname': return checkNickname(nickname);
-      case 'getEvent': return res(fetchActiveEvent());
-       case 'getSettings': return getSettings();
-       case 'getRule': return getRule();
-       case 'getLeaderboard': return getLeaderboard();
+        case 'getEvent': return res(fetchActiveEvent());
+        case 'getEvents': return getEvents();
+        case 'getEventDetail': return getEventDetail(e.parameter.eventId);
+        case 'getSettings': return getSettings();
+        case 'getRule': return getRule();
+        case 'getRules': return getRules();
+        case 'getRuleById': return getRuleById(e.parameter.ruleId);
+        case 'migrateEventsToNewSchema': return migrateEventsToNewSchema();
+        case 'getLeaderboard': return getLeaderboard();
       case 'getOpenMatches': return getOpenMatches(e.parameter.tournament_url);
       case 'getActiveEvent': return getActiveEvent();
+      case 'findTournamentResultSheet': return res(findTournamentResultSheet(e.parameter.eventId));
+      case 'checkTournamentSyncStatus': return res(checkTournamentSyncStatus(e.parameter.eventId));
       default: return res({ error: "Endpoint GET tidak ditemukan: " + path });
     }
   } catch (err) {
@@ -46,6 +556,9 @@ function doPost(e) {
       case 'attendance': return postAttendance(data);
       case 'createEvent': return createEvent(data);
       case 'resetArena': return resetArena();
+      case 'startEvent': return startEvent(data);
+      case 'endEvent': return endEvent(data);
+      case 'updateEvent': return updateEvent(data);
       case 'cancelAttendance': return cancelAttendance(data);
       case 'generateTournament': return generateTournament(data);
       case 'updateBio': return updateBio(data);
@@ -55,11 +568,33 @@ function doPost(e) {
        case 'saveRule': return saveRule(data);
        case 'submitMatchScore': return submitMatchScore(data);
        case 'startTournament': return startTournament(data);
-       case 'randomizeParticipants': return randomizeParticipants(data);
+       case 'startTournamentStatus': return startTournamentStatus(data);
+       case 'finishTournamentStatus': return finishTournamentStatus(data);
+        case 'randomizeParticipants': return randomizeParticipants(data);
        case 'updateSwissRounds': return updateSwissRounds(data);
-      case 'createTournament': return createTournament(data);
+       case 'createTournament': return createTournament(data);
+      case 'finishTournament': return finishTournament(data);
       case 'exportStandings': return exportStandings(data);
+      case 'getBladerProfile': return getBladerProfile(data);
+      case 'repairTournamentParticipantMapping': return repairTournamentParticipantMapping(data);
+      case 'previewTournamentResultsToLeaderboard': return previewTournamentResultsToLeaderboard(data);
+      case 'applyTournamentResultsToLeaderboard': return applyTournamentResultsToLeaderboard(data);
+      case 'rolloverLeaderboard': return rolloverLeaderboard();
+      case 'repairLeaderboardAfterFirstSync': return repairLeaderboardAfterFirstSync();
+      case 'repairExcludedLeaderboardPlayer': return repairExcludedLeaderboardPlayer(data);
       case 'manualSync': return handleManualSync(data);
+      case 'backupEventAndSettings': return backupEventAndSettings();
+      case 'migratePublicProfileIds': return ensurePublicProfileId(SS.getSheetByName("Players"));
+      case 'getBeybladeParts': return getBeybladeParts();
+      case 'getMyDecks': return getMyDecks(data);
+      case 'createDeck': return createDeck(data);
+      case 'updateDeck': return updateDeck(data);
+      case 'deleteDeck': return deleteDeck(data);
+      case 'toggleDeckActive': return toggleDeckActive(data);
+      case 'migrateLegacyDeckPartIds': return migrateLegacyDeckPartIds();
+      case 'fixLegacyDeckRow': return fixLegacyDeckRow(data && data.deckId ? data.deckId : '');
+      case 'getBladerDeckSets': return getBladerDeckSets(data);
+      case 'createBladerDeckSet': return createBladerDeckSet(data);
       default: return res({ error: "Endpoint POST tidak ditemukan" });
     }
   } catch (err) {
@@ -74,85 +609,567 @@ function fetchActiveEvent() {
   if (!sheet) return { error: "Sheet Events tidak ditemukan" };
 
   const rows = sheet.getDataRange().getDisplayValues();
-  rows.shift(); // Hapus Header
+  if (rows.length < 2) return { event: null, participants: [], count: 0 };
 
-  // Mencari baris yang kolom ke-5 (index 4) bernilai "aktif"
-  const activeEvent = rows.find(row => row[4] && row[4].toString().toLowerCase().trim() === "aktif");
+  const headers = rows[0];
+  const map = {};
+  headers.forEach((h, i) => {
+    map[String(h).toLowerCase().trim()] = i;
+  });
+
+  const statusIdx = map['status'];
+  const idIdx = map['event_id'] !== undefined ? map['event_id'] : map['id'];
+  const namaIdx = map['nama'];
+  const lokasiIdx = map['lokasi'];
+  const urlIdx = map['challonge_url'] !== undefined ? map['challonge_url'] : map['challongeurl'];
+  const waktuIdx = map['waktu_event'] !== undefined ? map['waktu_event'] : (map['waktu'] !== undefined ? map['waktu'] : -1);
+  const tanggalIdx = map['tanggal_event'];
+  const ruleIdIdx = map['rule_id'];
+  const tournamentStatusIdx = map['tournament_status'];
+
+  const activeEvent = rows.slice(1).find(row => {
+    const status = String(row[statusIdx] || '').toLowerCase().trim();
+    return status === 'aktif';
+  });
 
   if (!activeEvent) {
     return { event: null, participants: [], count: 0 };
   }
 
-  // Ambil data peserta yang sudah absen untuk event ini (pakai kolom "nama")
   const attendanceSheet = SS.getSheetByName("Attendance");
   const attendanceRows = attendanceSheet.getDataRange().getValues();
-  attendanceRows.shift(); // Hapus Header
+  attendanceRows.shift();
 
+  const eventId = activeEvent[idIdx] || '';
   const participants = attendanceRows
-    .filter(row => row[1] == activeEvent[0]) // Kolom event_id
+    .filter(row => String(row[1] || '').trim() === String(eventId).trim())
     .map(row => ({
-      googleId: row[2], // Google ID peserta
-      nama: row[3], // Nickname dari attendance (kolom "nama")
-      foto: row[5], // Photo URL
+      googleId: row[2],
+      nama: row[3],
+      foto: row[5],
       email: row[4]
     }));
 
-  // Ambil challongeUrl jika ada (kolom G = index 6)
-  const challongeUrl = activeEvent[6] ? String(activeEvent[6]).trim() : '';
-  // Ambil waktu event dari kolom J = index 9
-  const waktu = activeEvent[9] ? String(activeEvent[9]).trim() : '20.00 WIB';
+  const challongeUrl = urlIdx >= 0 ? String(activeEvent[urlIdx] || '').trim() : '';
+  const waktu = waktuIdx >= 0 ? String(activeEvent[waktuIdx] || '').trim() : '20.00 WIB';
+  const tanggalEvent = tanggalIdx !== undefined ? String(activeEvent[tanggalIdx] || '').trim() : '';
+  const ruleId = ruleIdIdx >= 0 ? String(activeEvent[ruleIdIdx] || '').trim() : '';
+  const tournamentStatus = tournamentStatusIdx !== undefined ? String(activeEvent[tournamentStatusIdx] || '').toLowerCase().trim() : 'not_started';
+
+  Logger.log('[fetchActiveEvent] eventId=' + eventId + ' status=' + String(activeEvent[statusIdx] || '').toLowerCase().trim() + ' tournament_status=' + tournamentStatus);
 
   return {
     event: {
-      id: activeEvent[0],
-      nama: activeEvent[1],
-      lokasi: activeEvent[3],
+      event_id: eventId,
+      id: eventId,
+      nama: String(activeEvent[namaIdx] || ''),
+      lokasi: String(activeEvent[lokasiIdx] || ''),
       challongeUrl: challongeUrl,
-      waktu: waktu
+      challonge_url: challongeUrl,
+      waktu: waktu,
+      waktu_event: waktu,
+      tanggal_event: tanggalEvent,
+      tanggal_buat: String(activeEvent[map['tanggal_buat']] || ''),
+      status: String(activeEvent[statusIdx] || '').toLowerCase().trim(),
+      rule_id: ruleId,
+      tournament_status: tournamentStatus
     },
     participants: participants,
     count: participants.length
   };
 }
 
+function getEventDetail(eventId) {
+  const eventSheet = SS.getSheetByName("Events");
+  if (!eventSheet) return res({ error: "Sheet Events tidak ditemukan" });
+
+  const values = eventSheet.getDataRange().getDisplayValues();
+  const headers = values[0];
+  const rows = values.slice(1);
+
+  if (rows.length === 0) {
+    return res({ event: null, rule: null, participants: [], count: 0, results: [] });
+  }
+
+  const map = getHeaderMap(eventSheet);
+  const eventIdCol = map['event_id'] !== undefined ? map['event_id'] : map['id'];
+
+  if (eventIdCol === undefined) {
+    return res({ error: "Header event_id/id tidak ditemukan di Events" });
+  }
+
+  const targetRow = rows.find(r =>
+    String(r[eventIdCol] || '').trim() === String(eventId || '').trim()
+  );
+
+  if (!targetRow) {
+    return res({ event: null, rule: null, participants: [], count: 0, results: [] });
+  }
+
+  const id = String(targetRow[eventIdCol] || '').trim();
+  const nama = String(targetRow[map['nama']] || '').trim();
+  const lokasi = String(targetRow[map['lokasi']] || '').trim();
+  const status = String(targetRow[map['status']] || '').toLowerCase().trim();
+  const challongeId = map['challonge_id'] !== undefined ? String(targetRow[map['challonge_id']] || '').trim() : '';
+  const challongeUrl = map['challonge_url'] !== undefined ? String(targetRow[map['challonge_url']] || '').trim() : '';
+  const challongeState = map['challonge_state'] !== undefined ? String(targetRow[map['challonge_state']] || '').trim() : '';
+  const createdAt = map['created_at'] !== undefined ? String(targetRow[map['created_at']] || '').trim() : '';
+  const tanggalBuat = map['tanggal_buat'] !== undefined ? String(targetRow[map['tanggal_buat']] || '').trim() : (map['tanggal'] !== undefined ? String(targetRow[map['tanggal']] || '').trim() : '');
+  const tanggalEvent = map['tanggal_event'] !== undefined ? String(targetRow[map['tanggal_event']] || '').trim() : '';
+  const waktuEvent = map['waktu_event'] !== undefined ? String(targetRow[map['waktu_event']] || '').trim() : (map['waktu'] !== undefined ? String(targetRow[map['waktu']] || '').trim() : '');
+  const ruleId = map['rule_id'] !== undefined ? String(targetRow[map['rule_id']] || '').trim() : '';
+  const tournamentStatus = map['tournament_status'] !== undefined ? String(targetRow[map['tournament_status']] || '').toLowerCase().trim() : 'not_started';
+
+  Logger.log('[getEventDetail] eventId=' + id + ' status=' + status + ' tournament_status=' + tournamentStatus);
+
+  const event = {
+    event_id: id,
+    id: id,
+    nama: nama,
+    lokasi: lokasi,
+    status: status,
+    challonge_id: challongeId,
+    challonge_url: challongeUrl,
+    challongeUrl: challongeUrl,
+    challonge_state: challongeState,
+    created_at: createdAt,
+    tanggal_buat: tanggalBuat,
+    tanggal_event: tanggalEvent,
+    waktu_event: waktuEvent,
+    waktu: waktuEvent || '',
+    rule_id: ruleId,
+    tournament_status: tournamentStatus
+  };
+
+  let rule = null;
+  const eventRuleId = String(event.rule_id || '').trim();
+  if (eventRuleId) {
+    const ruleSheet = SS.getSheetByName("Rules");
+    if (ruleSheet) {
+      const ruleValues = ruleSheet.getDataRange().getDisplayValues();
+      if (ruleValues.length >= 2) {
+        const ruleHeaders = ruleValues[0];
+        const ruleRows = ruleValues.slice(1);
+        const ruleMap = {};
+        ruleHeaders.forEach((h, i) => {
+          ruleMap[String(h).toLowerCase().trim()] = i;
+        });
+        const targetRule = ruleRows.find(row => String(row[ruleMap['rule_id']] || '').toLowerCase() === eventRuleId.toLowerCase());
+        if (targetRule) {
+          rule = {
+            rule_id: String(targetRule[ruleMap['rule_id']] || ''),
+            nama: String(targetRule[ruleMap['nama']] || ''),
+            periode: String(targetRule[ruleMap['periode']] || ''),
+            title: String(targetRule[ruleMap['title']] || ''),
+            image_url: String(targetRule[ruleMap['image_url']] || ''),
+            warning: String(targetRule[ruleMap['warning']] || ''),
+            details: String(targetRule[ruleMap['details']] || ''),
+            status: String(targetRule[ruleMap['status']] || '').toLowerCase().trim()
+          };
+        }
+      }
+    }
+  }
+
+  const attendanceSheet = SS.getSheetByName("Attendance");
+  let participants = [];
+  if (attendanceSheet) {
+    const attendanceRows = attendanceSheet.getDataRange().getValues();
+    attendanceRows.shift();
+    participants = attendanceRows
+      .filter(row => String(row[1] || '').trim() === String(eventId || '').trim())
+      .map(row => ({
+        googleId: String(row[2] || ''),
+        nama: String(row[3] || ''),
+        email: String(row[4] || ''),
+        foto: String(row[5] || '')
+      }));
+  }
+
+  let results = [];
+  const sheetName = event.nama.trim();
+  const resultSheet = SS.getSheetByName(sheetName);
+  if (resultSheet) {
+    const resultValues = resultSheet.getDataRange().getDisplayValues();
+    if (resultValues.length >= 3) {
+      const resultHeaders = resultValues[1];
+      const resultMap = {};
+      resultHeaders.forEach((h, i) => {
+        resultMap[String(h).toLowerCase().trim()] = i;
+      });
+
+      if (resultMap['nama'] === undefined) {
+        console.error('getEventDetail: header Nama tidak ditemukan di sheet ' + sheetName + ' headers=' + JSON.stringify(resultMap));
+      } else {
+        const isNewFormat = resultMap['google_id'] !== undefined || resultMap['google id'] !== undefined;
+        const rankIdx = resultMap['rank'];
+        const pointIdx = resultMap['point'];
+        const namaIdx = resultMap['nama'];
+        const winLossIdx = resultMap['win - lose'] !== undefined ? resultMap['win - lose'] : resultMap['win-lose'];
+        const totalWinIdx = resultMap['total win'] !== undefined ? resultMap['total win'] : resultMap['totalwin'];
+        const pointFinishIdx = resultMap['point finish'] !== undefined ? resultMap['point finish'] : resultMap['pointfinish'];
+        const optionalPointIdx = resultMap['optional points'] !== undefined ? resultMap['optional points'] : resultMap['optionalpoint'];
+
+        if (rankIdx !== undefined && pointIdx !== undefined && namaIdx !== undefined) {
+          results = resultValues.slice(2).map(row => ({
+            rank: String(row[rankIdx] || ''),
+            point: String(row[pointIdx] || ''),
+            nama: String(row[namaIdx] || ''),
+            winLoss: winLossIdx !== undefined ? String(row[winLossIdx] || '') : '',
+            totalWin: totalWinIdx !== undefined ? String(row[totalWinIdx] || '') : '',
+            pointFinish: pointFinishIdx !== undefined ? String(row[pointFinishIdx] || '') : '',
+            optionalPoint: optionalPointIdx !== undefined ? String(row[optionalPointIdx] || '') : ''
+          }));
+        }
+      }
+    }
+  }
+
+  return res({
+    event,
+    rule,
+    participants,
+    count: participants.length,
+    results
+  });
+}
+
+function getEvents() {
+  const eventSheet = SS.getSheetByName("Events");
+  if (!eventSheet) return res({ status: 'error', events: [] });
+
+  const values = eventSheet.getDataRange().getDisplayValues();
+  if (values.length < 2) return res({ status: 'success', events: [] });
+
+  const headers = values[0];
+  const rows = values.slice(1);
+  const map = getHeaderMap(eventSheet);
+
+  const events = rows.map(row => {
+    const id = map['event_id'] !== undefined ? map['event_id'] : map['id'];
+    const nama = map['nama'];
+    const lokasi = map['lokasi'];
+    const status = map['status'];
+    const challongeId = map['challonge_id'] !== undefined ? map['challonge_id'] : map['challongeid'];
+    const challongeUrl = map['challonge_url'] !== undefined ? map['challonge_url'] : map['challongeurl'];
+    const challongeState = map['challonge_state'] !== undefined ? map['challonge_state'] : map['challongestate'];
+    const createdAt = map['created_at'];
+    const tanggalBuat = map['tanggal_buat'] !== undefined ? map['tanggal_buat'] : map['tanggal'];
+    const tanggalEvent = map['tanggal_event'];
+    const waktuEvent = map['waktu_event'] !== undefined ? map['waktu_event'] : map['waktu'];
+    const ruleId = map['rule_id'];
+    const tournamentStatus = map['tournament_status'];
+
+    const challongeUrlVal = challongeUrl !== undefined ? String(row[challongeUrl] || '').trim() : '';
+    const waktuEventVal = waktuEvent !== undefined ? String(row[waktuEvent] || '').trim() : '';
+    const tanggalEventVal = tanggalEvent !== undefined ? String(row[tanggalEvent] || '').trim() : '';
+    const tournamentStatusVal = tournamentStatus !== undefined ? String(row[tournamentStatus] || '').toLowerCase().trim() : 'not_started';
+
+    return {
+      event_id: String(row[id] || '').trim(),
+      id: String(row[id] || '').trim(),
+      nama: String(row[nama] || '').trim(),
+      lokasi: String(row[lokasi] || '').trim(),
+      status: String(row[status] || '').toLowerCase().trim(),
+      challonge_id: challongeId !== undefined ? String(row[challongeId] || '').trim() : '',
+      challonge_url: challongeUrlVal,
+      challongeUrl: challongeUrlVal,
+      challonge_state: challongeState !== undefined ? String(row[challongeState] || '').trim() : '',
+      created_at: createdAt !== undefined ? String(row[createdAt] || '').trim() : '',
+      tanggal_buat: tanggalBuat !== undefined ? String(row[tanggalBuat] || '').trim() : '',
+      tanggal_event: tanggalEventVal,
+      waktu_event: waktuEventVal,
+      waktu: waktuEventVal,
+      rule_id: ruleId !== undefined ? String(row[ruleId] || '').trim() : '',
+      tournament_status: tournamentStatusVal
+    };
+  });
+
+  Logger.log('[getEvents] sample=' + JSON.stringify(events.slice(0, 3)));
+
+  const statusOrder = { 'aktif': 0, 'selesai': 1, 'draft': 2, 'upcoming': 3 };
+  events.sort((a, b) => {
+    const orderA = statusOrder[a.status] ?? 99;
+    const orderB = statusOrder[b.status] ?? 99;
+    if (orderA !== orderB) return orderA - orderB;
+
+    const dateA = a.tanggal_event || a.tanggal_buat || '';
+    const dateB = b.tanggal_event || b.tanggal_buat || '';
+    if (dateA && dateB) return dateB.localeCompare(dateA);
+    if (dateA) return -1;
+    if (dateB) return 1;
+    return b.event_id.localeCompare(a.event_id);
+  });
+
+  return res({ status: 'success', events });
+}
+
+function buildTournamentResultSheetIndex() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheets = ss.getSheets();
+  const index = {};
+  const skipSheets = ['Events', 'Players', 'Attendance', 'Leaderboard', 'Rules', 'Settings', 'TEMPLATE', 'TournamentParticipants', 'TournamentLeaderboardSync'];
+
+  for (const sheet of sheets) {
+    const sheetName = sheet.getName();
+    if (skipSheets.indexOf(sheetName) >= 0) continue;
+
+    const values = sheet.getDataRange().getDisplayValues();
+    if (values.length < 3) continue;
+
+    const row1 = values[0];
+    const row2 = values[1];
+    const row2Headers = row2.map(h => String(h || '').toLowerCase().trim());
+
+    const hasKlasemen = row1.some(cell => String(cell || '').toLowerCase().trim() === 'klasemen');
+    const hasRank = row2Headers.indexOf('rank') >= 0;
+    const hasPoint = row2Headers.indexOf('point') >= 0;
+    const hasNama = row2Headers.indexOf('nama') >= 0;
+
+    if (!hasKlasemen || !hasRank || !hasPoint || !hasNama) continue;
+
+    const eventIdCol = row2Headers.indexOf('event id');
+    if (eventIdCol < 0) continue;
+
+    for (let i = 2; i < values.length; i++) {
+      const rowEventId = String(values[i][eventIdCol] || '').trim();
+      if (rowEventId) {
+        index[rowEventId] = sheetName;
+      }
+    }
+  }
+
+  return index;
+}
+
+function getTournamentResultSheetIndex() {
+  const cache = CacheService.getScriptCache();
+  const cacheKey = 'tournamentResultSheetIndex';
+  const cached = cache.get(cacheKey);
+  
+  if (cached) {
+    try {
+      return JSON.parse(cached);
+    } catch (e) {
+      // fallback to rebuild
+    }
+  }
+
+  const index = buildTournamentResultSheetIndex();
+  try {
+    cache.put(cacheKey, JSON.stringify(index), 300);
+  } catch (e) {
+    // cache full or unavailable, continue without cache
+  }
+  return index;
+}
+
+function invalidateTournamentResultSheetIndex() {
+  try {
+    CacheService.getScriptCache().remove('tournamentResultSheetIndex');
+  } catch (e) {
+    // ignore
+  }
+}
+
+function findTournamentResultSheet(eventId) {
+  const index = getTournamentResultSheetIndex();
+  if (index[eventId]) {
+    return index[eventId];
+  }
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheets = ss.getSheets();
+  
+  let eventName = '';
+  try {
+    const eventSheet = SS.getSheetByName("Events");
+    if (eventSheet) {
+      const eventValues = eventSheet.getDataRange().getDisplayValues();
+      const eventHeaders = eventValues[0];
+      const eventRows = eventValues.slice(1);
+      const eventMap = {};
+      eventHeaders.forEach((h, i) => {
+        eventMap[String(h).toLowerCase().trim()] = i;
+      });
+      const eventIdCol = eventMap['event_id'] !== undefined ? eventMap['event_id'] : eventMap['id'];
+      const namaCol = eventMap['nama'];
+      if (eventIdCol !== undefined && namaCol !== undefined) {
+        for (let i = 0; i < eventRows.length; i++) {
+          if (String(eventRows[i][eventIdCol] || '').trim() === eventId) {
+            eventName = String(eventRows[i][namaCol] || '').trim();
+            break;
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Gagal baca event name untuk findTournamentResultSheet: ' + e.message);
+  }
+  
+  const skipSheets = ['Events', 'Players', 'Attendance', 'Leaderboard', 'Rules', 'Settings', 'TEMPLATE', 'TournamentParticipants', 'TournamentLeaderboardSync'];
+  
+  for (const sheet of sheets) {
+    const sheetName = sheet.getName();
+    if (skipSheets.indexOf(sheetName) >= 0) continue;
+    
+    const values = sheet.getDataRange().getDisplayValues();
+    if (values.length < 3) continue;
+    
+    const row1 = values[0];
+    const row2 = values[1];
+    const row2Headers = row2.map(h => String(h || '').toLowerCase().trim());
+    
+    const hasKlasemen = row1.some(cell => String(cell || '').toLowerCase().trim() === 'klasemen');
+    const hasRank = row2Headers.indexOf('rank') >= 0;
+    const hasPoint = row2Headers.indexOf('point') >= 0;
+    const hasNama = row2Headers.indexOf('nama') >= 0;
+    
+    if (!hasKlasemen || !hasRank || !hasPoint || !hasNama) continue;
+    
+    const eventIdCol = row2Headers.indexOf('event id');
+    
+    if (eventIdCol >= 0) {
+      for (let i = 2; i < values.length; i++) {
+        const rowEventId = String(values[i][eventIdCol] || '').trim();
+        if (rowEventId === eventId) {
+          return sheetName;
+        }
+      }
+    } else if (eventName && sheetName === eventName) {
+      return sheetName;
+    }
+  }
+  
+  return null;
+}
+
 function getBlader(googleId) {
   const playerSheet = SS.getSheetByName("Players");
   const adminSheet = SS.getSheetByName("Admins");
 
-  const players = playerSheet.getDataRange().getValues();
-  const admins = adminSheet.getDataRange().getValues().flat().map(a => a.toString().toLowerCase());
+  if (!playerSheet) return res({ registered: false });
 
-  const player = players.find(row => row[0].toString() === googleId.toString());
+  const playerValues = playerSheet.getDataRange().getDisplayValues();
+  if (playerValues.length < 2) return res({ registered: false });
+
+  const playerHeaders = playerValues[0];
+  const playerRows = playerValues.slice(1);
+
+  const playerMap = {};
+  playerHeaders.forEach((h, i) => {
+    playerMap[String(h).toLowerCase().trim()] = i;
+  });
+
+  const googleIdCol = playerMap['google_id'] !== undefined ? playerMap['google_id'] : playerMap['googleid'];
+  const emailCol = playerMap['email'];
+  const nicknameCol = playerMap['nickname'];
+  const photoCol = playerMap['photo_url'] !== undefined ? playerMap['photo_url'] : (playerMap['foto'] !== undefined ? playerMap['foto'] : playerMap['photo']);
+  const sloganCol = playerMap['slogan'];
+  const catatanCol = playerMap['catatan'];
+  const ostCol = playerMap['ost_url'];
+
+  const normalizeId = (value) => String(value ?? '').trim();
+
+  const targetGoogleId = normalizeId(googleId);
+  const matchedRow = playerRows.find(row => {
+    if (googleIdCol !== undefined) {
+      const rowId = normalizeId(row[googleIdCol]);
+      if (rowId && rowId === targetGoogleId) {
+        return true;
+      }
+    }
+    return false;
+  });
+
+  let matchedBy = 'none';
+  let player = null;
+
+  if (matchedRow) {
+    player = matchedRow;
+    matchedBy = 'google_id';
+  } else {
+    const email = String(googleId || '');
+    const emailMatch = playerRows.find(row => {
+      if (emailCol === undefined) return false;
+      const rowEmail = normalizeId(row[emailCol]);
+      return rowEmail && rowEmail.toLowerCase() === email.toLowerCase();
+    });
+    if (emailMatch) {
+      player = emailMatch;
+      matchedBy = 'email';
+    }
+  }
+
+  Logger.log('[getBlader] googleId=' + targetGoogleId + ' matchedBy=' + matchedBy);
 
   if (!player) return res({ registered: false });
 
-  // Jika email user ada di tab Admins, kasih role "Admin", jika tidak "Blader"
-  const userEmail = player[1].toString().toLowerCase();
-  const isAdmin = admins.includes(userEmail);
+  const admins = adminSheet ? adminSheet.getDataRange().getDisplayValues().flat().map(a => a.toString().toLowerCase()) : [];
+  const userEmail = emailCol !== undefined ? normalizeId(player[emailCol]) : '';
+  const isAdmin = admins.some(a => a && a === userEmail.toLowerCase());
 
   return res({
     registered: true,
-    googleId: player[0].toString(),
-    nickname: player[3],
+    googleId: googleIdCol !== undefined ? normalizeId(player[googleIdCol]) : targetGoogleId,
+    email: emailCol !== undefined ? normalizeId(player[emailCol]) : '',
+    nickname: nicknameCol !== undefined ? String(player[nicknameCol] || '') : '',
     role: isAdmin ? "Admin" : "Blader",
-    photo: player[4],
-    photoUrl: player[4],
-    slogan: player[8] ? String(player[8]) : "",
-    catatan: player[9] ? String(player[9]) : "",
-    ost_url: player[10] ? String(player[10]) : ""
+    photo: photoCol !== undefined ? String(player[photoCol] || '') : '',
+    photoUrl: photoCol !== undefined ? String(player[photoCol] || '') : '',
+    slogan: sloganCol !== undefined ? String(player[sloganCol] || '') : '',
+    catatan: catatanCol !== undefined ? String(player[catatanCol] || '') : '',
+    ost_url: ostCol !== undefined ? String(player[ostCol] || '') : ''
   });
 }
 
 function cancelAttendance(data) {
+  const eventId = String(data.eventId || '').trim();
+  if (!eventId) return res({ status: 'error', message: 'eventId wajib diisi' });
+
+  const eventSheet = SS.getSheetByName("Events");
+  if (!eventSheet) return res({ status: 'error', message: 'Sheet Events tidak ditemukan' });
+
+  const eventValues = eventSheet.getDataRange().getDisplayValues();
+  const eventHeaders = eventValues[0];
+  const eventRows = eventValues.slice(1);
+  const eventMap = {};
+  eventHeaders.forEach((h, i) => {
+    eventMap[String(h).toLowerCase().trim()] = i;
+  });
+
+  const eventIdCol = eventMap['event_id'] !== undefined ? eventMap['event_id'] : eventMap['id'];
+  const statusCol = eventMap['status'];
+  const tournamentStatusCol = eventMap['tournament_status'];
+
+  const targetEvent = eventRows.find(r =>
+    String(r[eventIdCol] || '').trim() === eventId
+  );
+
+  if (!targetEvent) {
+    return res({ status: 'error', message: 'Event tidak ditemukan' });
+  }
+
+  const eventStatus = String(targetEvent[statusCol] || '').toLowerCase().trim();
+  if (eventStatus !== 'aktif') {
+    return res({ status: 'error', message: 'Pembatalan absensi hanya bisa dilakukan saat event sedang aktif.' });
+  }
+
+  const tournamentStatus = tournamentStatusCol !== undefined
+    ? String(targetEvent[tournamentStatusCol] || '').toLowerCase().trim()
+    : 'not_started';
+
+  if (tournamentStatus === 'running' || tournamentStatus === 'finished') {
+    return res({ status: 'error', message: 'Attendance sudah ditutup karena tournament sudah dimulai.' });
+  }
+
   const sheet = SS.getSheetByName("Attendance");
   const rows = sheet.getDataRange().getValues();
 
-  // Cari baris yang cocok dengan eventId dan googleId
   for (var i = 1; i < rows.length; i++) {
-    if (rows[i][1].toString() === data.eventId.toString() &&
+    if (rows[i][1].toString() === eventId &&
       rows[i][2].toString() === data.googleId.toString()) {
 
-      // Hapus baris tersebut (i + 1 karena index array mulai dari 0, baris sheet mulai dari 1)
       sheet.deleteRow(i + 1);
       return res({ status: "success", message: "Kehadiran dibatalkan" });
     }
@@ -166,18 +1183,43 @@ function getLeaderboard() {
     const playerSheet = SS.getSheetByName("Players");
     const boardSheet = SS.getSheetByName("Leaderboard");
 
-    // Proteksi jika sheet tidak ada
     if (!playerSheet || !boardSheet) return res([]);
 
+    const boardValues = boardSheet.getDataRange().getDisplayValues();
+    if (boardValues.length < 2) return res([]);
+
+    const boardHeaders = boardValues[0];
+    const boardRows = boardValues.slice(1);
+    const boardMap = {};
+    boardHeaders.forEach((h, i) => {
+      boardMap[String(h).toLowerCase().trim()] = i;
+    });
+
+    const idCol = boardMap['google_id'] !== undefined ? boardMap['google_id'] : boardMap['googleid'];
+    const statusCol = boardMap['status'];
+    const pointCol = boardMap['point'];
+    const pointFinishCol = boardMap['point_finish'] !== undefined ? boardMap['point_finish'] : boardMap['pointfinish'];
+    const prevRankCol = boardMap['previous_rank'];
+
+    const entries = [];
+    boardRows.forEach(row => {
+      const gId = idCol !== undefined ? String(row[idCol] || '').trim() : '';
+      if (!gId) return;
+      entries.push({
+        googleId: gId,
+        status: statusCol !== undefined ? String(row[statusCol] || '').trim() : 'stay',
+        point: pointCol !== undefined ? Number(row[pointCol]) || 0 : 0,
+        pointFinish: pointFinishCol !== undefined ? Number(row[pointFinishCol]) || 0 : 0,
+        previousRank: prevRankCol !== undefined ? (String(row[prevRankCol] || '').trim() ? Number(row[prevRankCol]) : null) : null
+      });
+    });
+
+    entries.sort((a, b) => {
+      if (b.point !== a.point) return b.point - a.point;
+      return b.pointFinish - a.pointFinish;
+    });
+
     const players = playerSheet.getDataRange().getValues();
-    const boardRows = boardSheet.getDataRange().getValues();
-
-    // Proteksi jika data kosong (hanya header)
-    if (boardRows.length < 2) return res([]);
-
-    boardRows.shift(); // Hapus header leaderboard
-
-    // Buat Map Player
     const playerMap = {};
     players.forEach(row => {
       playerMap[row[0].toString()] = {
@@ -188,16 +1230,27 @@ function getLeaderboard() {
       };
     });
 
-    // Gabungkan data
-    const finalData = boardRows.map(row => {
-      const gId = row[0].toString();
-      const pInfo = playerMap[gId] || { nickname: "Unknown Blader", foto: "", slogan: "", catatan: "" };
+    const finalData = entries.map((entry, index) => {
+      const currentRank = index + 1;
+      const pInfo = playerMap[entry.googleId] || { nickname: "Unknown Blader", foto: "", slogan: "", catatan: "" };
+      let status = entry.status || 'stay';
+      if (entry.previousRank === null || entry.previousRank === undefined || String(entry.previousRank) === '') {
+        status = 'new';
+      } else if (entry.previousRank > currentRank) {
+        status = 'up';
+      } else if (entry.previousRank < currentRank) {
+        status = 'down';
+      } else {
+        status = 'stay';
+      }
 
       return {
-        googleId: gId,
-        status: row[1] || "stay",
-        point: Number(row[2]) || 0,
-        pointFinish: Number(row[3]) || 0,
+        googleId: entry.googleId,
+        status: status,
+        previousRank: entry.previousRank,
+        rank: currentRank,
+        point: entry.point,
+        pointFinish: entry.pointFinish,
         name: pInfo.nickname,
         foto: pInfo.foto,
         slogan: pInfo.slogan,
@@ -205,18 +1258,2272 @@ function getLeaderboard() {
       };
     });
 
-    // Urutkan: point tertinggi dulu, kalau sama bandingkan pointFinish
-    finalData.sort((a, b) => {
+    return res(finalData);
+  } catch (err) {
+    console.error('getLeaderboard error: ' + err.message);
+    return res([]);
+  }
+}
+
+function generateShortId() {
+  const chars = 'abcdef0123456789';
+  let result = '';
+  for (let i = 0; i < 8; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+}
+
+function getCurrentUser() {
+  try {
+    const email = Session.getActiveUser().getEmail();
+    if (!email) return null;
+
+    const playerSheet = SS.getSheetByName('Players');
+    if (!playerSheet) return null;
+
+    const values = playerSheet.getDataRange().getDisplayValues();
+    if (values.length < 2) return null;
+
+    const headers = values[0];
+    const rows = values.slice(1);
+    const headerMap = {};
+    headers.forEach((h, i) => {
+      headerMap[String(h).toLowerCase().trim()] = i;
+    });
+
+    const emailCol = headerMap['email'];
+    const googleIdCol = headerMap['google_id'] !== undefined ? headerMap['google_id'] : headerMap['googleid'];
+    const nicknameCol = headerMap['nickname'];
+
+    if (emailCol === undefined) return null;
+
+    const matchedRow = rows.find(row => {
+      const rowEmail = String(row[emailCol] || '').trim().toLowerCase();
+      return rowEmail === email.toLowerCase();
+    });
+
+    if (!matchedRow) return null;
+
+    return {
+      email: email,
+      googleId: googleIdCol !== undefined ? String(matchedRow[googleIdCol] || '').trim() : '',
+      nickname: nicknameCol !== undefined ? String(matchedRow[nicknameCol] || '') : ''
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+function generateShortDeckId() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let result = '';
+  for (let i = 0; i < 6; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+}
+
+function getBeybladeParts() {
+  const partSheet = SS.getSheetByName('BeybladeParts');
+  if (!partSheet) return res({ status: 'success', parts: [] });
+
+  const values = partSheet.getDataRange().getDisplayValues();
+  if (values.length < 2) return res({ status: 'success', parts: [] });
+
+  const headers = values[0];
+  const rows = values.slice(1);
+  const headerMap = {};
+  headers.forEach((h, i) => {
+    headerMap[String(h).toLowerCase().trim()] = i;
+  });
+
+  const partIdCol = headerMap['part_id'];
+  const systemCol = headerMap['system'];
+  const partTypeCol = headerMap['part_type'];
+  const nameCol = headerMap['name'];
+  const isActiveCol = headerMap['is_active'];
+
+  const parts = rows.map(row => {
+    const partId = partIdCol !== undefined ? String(row[partIdCol] || '').trim() : '';
+    const system = systemCol !== undefined ? String(row[systemCol] || '').trim() : '';
+    const partType = partTypeCol !== undefined ? String(row[partTypeCol] || '').trim() : '';
+    const name = nameCol !== undefined ? String(row[nameCol] || '').trim() : '';
+    const isActive = isActiveCol !== undefined ? String(row[isActiveCol] || '').toLowerCase().trim() === 'true' : true;
+
+    return {
+      partId,
+      system,
+      partType,
+      name,
+      isActive
+    };
+  }).filter(p => p.partId);
+
+  return res({ status: 'success', parts });
+}
+
+function getBeybladePartsMap() {
+  const partSheet = SS.getSheetByName('BeybladeParts');
+  if (!partSheet) return {};
+
+  const values = partSheet.getDataRange().getDisplayValues();
+  if (values.length < 2) return {};
+
+  const headers = values[0];
+  const rows = values.slice(1);
+  const headerMap = {};
+  headers.forEach((h, i) => {
+    headerMap[String(h).toLowerCase().trim()] = i;
+  });
+
+  const partIdCol = headerMap['part_id'];
+  const systemCol = headerMap['system'];
+  const partTypeCol = headerMap['part_type'];
+  const nameCol = headerMap['name'];
+  const isActiveCol = headerMap['is_active'];
+
+  const map = {};
+  const seen = {};
+  const duplicates = [];
+  rows.forEach(row => {
+    const partId = partIdCol !== undefined ? String(row[partIdCol] || '').trim() : '';
+    if (!partId) return;
+    const system = systemCol !== undefined ? String(row[systemCol] || '').trim() : '';
+    const partType = partTypeCol !== undefined ? String(row[partTypeCol] || '').trim() : '';
+    const name = nameCol !== undefined ? String(row[nameCol] || '').trim() : '';
+    const isActive = isActiveCol !== undefined ? String(row[isActiveCol] || '').toLowerCase().trim() === 'true' : true;
+
+    if (seen[partId]) {
+      duplicates.push(partId);
+    }
+    seen[partId] = true;
+
+    map[partId] = {
+      partId,
+      system,
+      partType,
+      name,
+      isActive
+    };
+  });
+
+  if (duplicates.length > 0) {
+    Logger.log('[BEYBLADE PARTS DUPLICATES]', { duplicates });
+  }
+
+  return map;
+}
+
+function getMyDecks(data) {
+  const auth = resolveDeckOwner(data);
+  if (!auth.authorized) return res({ status: 'error', message: auth.error });
+
+  const userGoogleId = auth.googleId;
+  const deckSheet = SS.getSheetByName('BladerDecks');
+  if (!deckSheet) return res({ status: 'success', decks: [] });
+
+  const values = deckSheet.getDataRange().getDisplayValues();
+  if (values.length < 2) return res({ status: 'success', decks: [] });
+
+  const headers = values[0];
+  const rows = values.slice(1);
+  const headerMap = {};
+  headers.forEach((h, i) => {
+    headerMap[String(h).toLowerCase().trim()] = i;
+  });
+
+  const deckIdCol = headerMap['deck_id'];
+  const googleIdCol = headerMap['google_id'];
+  const deckNameCol = headerMap['deck_name'];
+  const systemCol = headerMap['system'];
+  const lockChipCol = headerMap['lock_chip'];
+  const bladeCol = headerMap['blade'];
+  const assistBladeCol = headerMap['assist_blade'];
+  const ratchetCol = headerMap['ratchet'];
+  const bitCol = headerMap['bit'];
+  const descriptionCol = headerMap['description'];
+  const isActiveCol = headerMap['is_active'];
+  const createdAtCol = headerMap['created_at'];
+  const updatedAtCol = headerMap['updated_at'];
+
+  const partsMap = getBeybladePartsMap();
+
+  const filter = String(data?.filter || 'active').toLowerCase().trim();
+
+  const decks = [];
+  let activeCount = 0;
+  let reserveCount = 0;
+
+  rows.forEach(row => {
+    const rowGoogleId = googleIdCol !== undefined ? String(row[googleIdCol] || '').trim() : '';
+    if (rowGoogleId !== userGoogleId) return;
+
+    const deckId = deckIdCol !== undefined ? String(row[deckIdCol] || '').trim() : '';
+    if (!deckId) return;
+
+    const lockChipId = lockChipCol !== undefined ? String(row[lockChipCol] || '').trim() : '';
+    const bladeId = bladeCol !== undefined ? String(row[bladeCol] || '').trim() : '';
+    const assistBladeId = assistBladeCol !== undefined ? String(row[assistBladeCol] || '').trim() : '';
+    const ratchetId = ratchetCol !== undefined ? String(row[ratchetCol] || '').trim() : '';
+    const bitId = bitCol !== undefined ? String(row[bitCol] || '').trim() : '';
+
+    const system = systemCol !== undefined ? String(row[systemCol] || '').trim() : '';
+    const isBxOrUx = system === 'BX' || system === 'UX';
+    const isActive = isActiveCol !== undefined ? String(row[isActiveCol] || '').toLowerCase().trim() === 'true' : true;
+
+    Logger.log('[DECK MATCH]', { deckId, googleId: rowGoogleId, isActive });
+
+    if (isActive) activeCount++;
+    else reserveCount++;
+
+    if (filter === 'active' && !isActive) return;
+    if (filter === 'reserve' && isActive) return;
+
+    const resolvePart = (partId, partType, expectedSystem) => {
+      if (!partId) return null;
+      const fromId = partsMap[partId];
+      if (fromId) {
+        Logger.log('[DECK PART RESOLVE]', { deckId, field: partType, partId, partType, system: expectedSystem, resolvedName: fromId.name });
+        return { partId: fromId.partId, name: fromId.name };
+      }
+      Logger.log('[DECK PART RESOLVE]', { deckId, field: partType, partId, partType, system: expectedSystem, resolvedName: partId });
+      Logger.log('[DECK PART IMAGE MISSING]', { deckId, partId, name: partId });
+      return { partId, name: partId };
+    };
+
+    decks.push({
+      deckId,
+      deckName: deckNameCol !== undefined ? String(row[deckNameCol] || '').trim() : '',
+      system,
+      lockChip: (!isBxOrUx && lockChipId) ? resolvePart(lockChipId, 'LOCK_CHIP', 'CX') : null,
+      blade: (bladeId) ? resolvePart(bladeId, 'BLADE', system) : null,
+      assistBlade: (!isBxOrUx && assistBladeId) ? resolvePart(assistBladeId, 'ASSIST_BLADE', 'CX') : null,
+      ratchet: (ratchetId) ? resolvePart(ratchetId, 'RATCHET', system) : null,
+      bit: (bitId) ? resolvePart(bitId, 'BIT', system) : null,
+      description: descriptionCol !== undefined ? String(row[descriptionCol] || '').trim() : '',
+      isActive,
+      createdAt: createdAtCol !== undefined ? String(row[createdAtCol] || '').trim() : '',
+      updatedAt: updatedAtCol !== undefined ? String(row[updatedAtCol] || '').trim() : ''
+    });
+  });
+
+  Logger.log('[DECK OWNER RESULT]', {
+    matchingDeckCount: decks.length,
+    activeCount,
+    reserveCount
+  });
+
+  Logger.log('[DECK LOAD]', { total: decks.length, active: activeCount, reserve: reserveCount });
+  return res({ status: 'success', decks, counts: { active: activeCount, reserve: reserveCount, total: activeCount + reserveCount } });
+}
+
+function resolveDeckOwner(data) {
+  const googleId = String(data.googleId || '').trim();
+  const sessionEmail = '';
+  let authenticated = false;
+
+  try {
+    const email = Session.getActiveUser().getEmail();
+    if (email) {
+      sessionEmail = email;
+      authenticated = true;
+    }
+  } catch (e) {
+    // Session unavailable
+  }
+
+  const authorized = !!googleId;
+
+  Logger.log('[DECK CREATE AUTH]', {
+    email: sessionEmail,
+    googleId: googleId,
+    authenticated,
+    authorized
+  });
+
+  if (!googleId) {
+    return { authorized: false, error: 'Unauthorized: googleId tidak diberikan' };
+  }
+
+  const playerSheet = SS.getSheetByName('Players');
+  if (!playerSheet) {
+    return { authorized: false, error: 'Sheet Players tidak ditemukan' };
+  }
+
+  const playerValues = playerSheet.getDataRange().getDisplayValues();
+  if (playerValues.length < 2) {
+    return { authorized: false, error: 'Data player tidak ditemukan' };
+  }
+
+  const playerHeaders = playerValues[0];
+  const playerRows = playerValues.slice(1);
+  const playerHeaderMap = {};
+  playerHeaders.forEach((h, i) => {
+    playerHeaderMap[String(h).toLowerCase().trim()] = i;
+  });
+
+  const playerGoogleIdCol = playerHeaderMap['google_id'] !== undefined ? playerHeaderMap['google_id'] : playerHeaderMap['googleid'];
+  if (playerGoogleIdCol === undefined) {
+    return { authorized: false, error: 'Kolom google_id tidak ditemukan di Players' };
+  }
+
+  const playerExists = playerRows.some(row => {
+    const rowGoogleId = String(row[playerGoogleIdCol] || '').trim();
+    return rowGoogleId === googleId;
+  });
+
+  Logger.log('[DECK OWNER RESOLUTION]', {
+    email: sessionEmail,
+    googleId: googleId,
+    authenticated,
+    playerExists
+  });
+
+  if (!playerExists) {
+    return { authorized: false, error: 'Unauthorized: Player tidak ditemukan' };
+  }
+
+  return { authorized: true, googleId };
+}
+
+function createDeck(data) {
+  const auth = resolveDeckOwner(data);
+  if (!auth.authorized) return res({ status: 'error', message: auth.error });
+
+  const userGoogleId = auth.googleId;
+  const deckSheet = SS.getSheetByName('BladerDecks');
+  if (!deckSheet) return res({ status: 'error', message: 'Sheet BladerDecks tidak ditemukan' });
+
+  const deckHeaders = deckSheet.getDataRange().getDisplayValues()[0];
+  const deckHeaderMap = {};
+  deckHeaders.forEach((h, i) => {
+    deckHeaderMap[String(h).toLowerCase().trim()] = i;
+  });
+  const isActiveCol = deckHeaderMap['is_active'];
+  const googleIdCol = deckHeaderMap['google_id'];
+
+  const deckName = String(data.deckName || '').trim();
+  const system = String(data.system || '').toUpperCase().trim();
+  const lockChip = String(data.lockChip || '').trim();
+  const blade = String(data.blade || '').trim();
+  const assistBlade = String(data.assistBlade || '').trim();
+  const ratchet = String(data.ratchet || '').trim();
+  const bit = String(data.bit || '').trim();
+  const description = String(data.description || '').trim();
+
+  if (!deckName) return res({ status: 'error', message: 'Deck name wajib diisi' });
+  if (!['BX', 'UX', 'CX'].includes(system)) return res({ status: 'error', message: 'System harus BX, UX, atau CX' });
+
+  const partsMap = getBeybladePartsMap();
+
+  const validation = validateDeckPartIds(data, partsMap);
+  if (!validation.valid) {
+    return res({ status: 'error', message: 'Invalid part selection. Expected part_id.' });
+  }
+
+  const validatePart = (partId, expectedType, expectedSystems) => {
+    const part = partsMap[partId];
+    if (!part) return false;
+    if (!part.isActive) return false;
+    if (expectedType && part.partType !== expectedType) return false;
+    if (expectedSystems && !expectedSystems.includes(part.system)) return false;
+    return true;
+  };
+
+  if (system === 'CX') {
+    if (!validatePart(lockChip, 'LOCK_CHIP', ['CX'])) return res({ status: 'error', message: 'Lock Chip tidak valid untuk CX' });
+    if (!validatePart(blade, 'BLADE', ['CX'])) return res({ status: 'error', message: 'Blade tidak valid untuk CX' });
+    if (!validatePart(assistBlade, 'ASSIST_BLADE', ['CX'])) return res({ status: 'error', message: 'Assist Blade tidak valid untuk CX' });
+    if (!validatePart(ratchet, 'RATCHET', ['ALL', 'CX'])) return res({ status: 'error', message: 'Ratchet tidak valid untuk CX' });
+    if (!validatePart(bit, 'BIT', ['ALL', 'CX'])) return res({ status: 'error', message: 'Bit tidak valid untuk CX' });
+  } else {
+    if (!validatePart(blade, 'BLADE', [system])) return res({ status: 'error', message: 'Blade tidak valid untuk ' + system });
+    if (!validatePart(ratchet, 'RATCHET', ['ALL', system])) return res({ status: 'error', message: 'Ratchet tidak valid untuk ' + system });
+    if (!validatePart(bit, 'BIT', ['ALL', system])) return res({ status: 'error', message: 'Bit tidak valid untuk ' + system });
+  }
+
+  const isActive = String(data.isActive || '').toLowerCase().trim() !== 'false';
+  const activeDecks = deckSheet.getDataRange().getDisplayValues().slice(1).filter(row => {
+    const rowGoogleId = googleIdCol !== undefined ? String(row[googleIdCol] || '').trim() : '';
+    const rowActive = isActiveCol !== undefined ? String(row[isActiveCol] || '').toLowerCase().trim() : 'true';
+    return rowGoogleId === userGoogleId && rowActive === 'true';
+  });
+
+  if (isActive && activeDecks.length >= 3) {
+    return res({ status: 'error', message: 'Maximum 3 active decks. Deactivate one active deck first.' });
+  }
+
+  let deckId;
+  const existingIds = new Set();
+  const allRows = deckSheet.getDataRange().getDisplayValues();
+  allRows.slice(1).forEach(row => {
+    const id = String(row[0] || '').trim();
+    if (id) existingIds.add(id);
+  });
+
+  do {
+    deckId = generateShortDeckId();
+  } while (existingIds.has(deckId));
+
+  const now = new Date();
+  const timestamp = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+
+  const isActiveValue = isActive ? 'TRUE' : 'FALSE';
+
+  Logger.log('[DECK CREATE PARTS]', {
+    deckId,
+    system,
+    lockChip: lockChip || '',
+    blade: blade || '',
+    assistBlade: assistBlade || '',
+    ratchet: ratchet || '',
+    bit: bit || ''
+  });
+
+  deckSheet.appendRow([
+    deckId,
+    userGoogleId,
+    deckName,
+    system,
+    lockChip || '',
+    blade || '',
+    assistBlade || '',
+    ratchet || '',
+    bit || '',
+    description,
+    isActiveValue,
+    timestamp,
+    timestamp
+  ]);
+
+  return res({ status: 'success', deckId, message: 'Deck berhasil dibuat' });
+}
+
+function validateDeckPartIds(data, partsMap) {
+  const fields = [
+    { key: 'lockChip', expectedType: 'LOCK_CHIP', expectedSystems: ['CX'] },
+    { key: 'blade', expectedType: 'BLADE', expectedSystems: ['BX', 'UX', 'CX', 'ALL'] },
+    { key: 'assistBlade', expectedType: 'ASSIST_BLADE', expectedSystems: ['CX'] },
+    { key: 'ratchet', expectedType: 'RATCHET', expectedSystems: ['BX', 'UX', 'CX', 'ALL'] },
+    { key: 'bit', expectedType: 'BIT', expectedSystems: ['BX', 'UX', 'CX', 'ALL'] }
+  ];
+
+  const invalidFields = [];
+
+  fields.forEach(field => {
+    const value = String(data[field.key] || '').trim();
+    if (!value) return;
+
+    const part = partsMap[value];
+    if (!part) {
+      invalidFields.push({
+        field: field.key,
+        value,
+        reason: 'Part ID tidak ditemukan di BeybladeParts'
+      });
+      return;
+    }
+    if (part.partType !== field.expectedType) {
+      invalidFields.push({
+        field: field.key,
+        value,
+        reason: `Expected type ${field.expectedType}, got ${part.partType}`
+      });
+    }
+  });
+
+  return {
+    valid: invalidFields.length === 0,
+    invalidFields
+  };
+}
+
+function updateDeck(data) {
+  const auth = resolveDeckOwner(data);
+  if (!auth.authorized) return res({ status: 'error', message: auth.error });
+
+  const userGoogleId = auth.googleId;
+  const deckSheet = SS.getSheetByName('BladerDecks');
+  if (!deckSheet) return res({ status: 'error', message: 'Sheet BladerDecks tidak ditemukan' });
+
+  const deckId = String(data.deckId || '').trim();
+  if (!deckId) return res({ status: 'error', message: 'deckId wajib diisi' });
+
+  const values = deckSheet.getDataRange().getDisplayValues();
+  if (values.length < 2) return res({ status: 'error', message: 'Data deck tidak ditemukan' });
+
+  const headers = values[0];
+  const rows = values.slice(1);
+  const headerMap = {};
+  headers.forEach((h, i) => {
+    headerMap[String(h).toLowerCase().trim()] = i;
+  });
+
+  const deckIdCol = headerMap['deck_id'];
+  const googleIdCol = headerMap['google_id'];
+  const deckNameCol = headerMap['deck_name'];
+  const systemCol = headerMap['system'];
+  const lockChipCol = headerMap['lock_chip'];
+  const bladeCol = headerMap['blade'];
+  const assistBladeCol = headerMap['assist_blade'];
+  const ratchetCol = headerMap['ratchet'];
+  const bitCol = headerMap['bit'];
+  const descriptionCol = headerMap['description'];
+  const updatedAtCol = headerMap['updated_at'];
+
+  let targetRowIndex = -1;
+  let targetRow = null;
+  for (let i = 0; i < rows.length; i++) {
+    const rowDeckId = deckIdCol !== undefined ? String(rows[i][deckIdCol] || '').trim() : '';
+    const rowGoogleId = googleIdCol !== undefined ? String(rows[i][googleIdCol] || '').trim() : '';
+    if (rowDeckId === deckId && rowGoogleId === userGoogleId) {
+      targetRowIndex = i + 2;
+      targetRow = rows[i];
+      break;
+    }
+  }
+
+  if (!targetRow || targetRowIndex < 0) return res({ status: 'error', message: 'Deck tidak ditemukan atau bukan milik Anda' });
+
+  const deckName = String(data.deckName || '').trim();
+  const system = String(data.system || '').toUpperCase().trim();
+  const lockChip = String(data.lockChip || '').trim();
+  const blade = String(data.blade || '').trim();
+  const assistBlade = String(data.assistBlade || '').trim();
+  const ratchet = String(data.ratchet || '').trim();
+  const bit = String(data.bit || '').trim();
+  const description = String(data.description || '').trim();
+
+  if (!deckName) return res({ status: 'error', message: 'Deck name wajib diisi' });
+  if (!['BX', 'UX', 'CX'].includes(system)) return res({ status: 'error', message: 'System harus BX, UX, atau CX' });
+
+  const partsMap = getBeybladePartsMap();
+
+  const validation = validateDeckPartIds(data, partsMap);
+  if (!validation.valid) {
+    return res({ status: 'error', message: 'Invalid part selection. Expected part_id.' });
+  }
+
+  const validatePart = (partId, expectedType, expectedSystems) => {
+    const part = partsMap[partId];
+    if (!part) return false;
+    if (!part.isActive) return false;
+    if (expectedType && part.partType !== expectedType) return false;
+    if (expectedSystems && !expectedSystems.includes(part.system)) return false;
+    return true;
+  };
+
+  if (system === 'CX') {
+    if (!validatePart(lockChip, 'LOCK_CHIP', ['CX'])) return res({ status: 'error', message: 'Lock Chip tidak valid untuk CX' });
+    if (!validatePart(blade, 'BLADE', ['CX'])) return res({ status: 'error', message: 'Blade tidak valid untuk CX' });
+    if (!validatePart(assistBlade, 'ASSIST_BLADE', ['CX'])) return res({ status: 'error', message: 'Assist Blade tidak valid untuk CX' });
+    if (!validatePart(ratchet, 'RATCHET', ['ALL', 'CX'])) return res({ status: 'error', message: 'Ratchet tidak valid untuk CX' });
+    if (!validatePart(bit, 'BIT', ['ALL', 'CX'])) return res({ status: 'error', message: 'Bit tidak valid untuk CX' });
+  } else {
+    if (!validatePart(blade, 'BLADE', [system])) return res({ status: 'error', message: 'Blade tidak valid untuk ' + system });
+    if (!validatePart(ratchet, 'RATCHET', ['ALL', system])) return res({ status: 'error', message: 'Ratchet tidak valid untuk ' + system });
+    if (!validatePart(bit, 'BIT', ['ALL', system])) return res({ status: 'error', message: 'Bit tidak valid untuk ' + system });
+  }
+
+  Logger.log('[DECK UPDATE PARTS]', {
+    deckId,
+    system,
+    lockChip: lockChip || '',
+    blade: blade || '',
+    assistBlade: assistBlade || '',
+    ratchet: ratchet || '',
+    bit: bit || ''
+  });
+
+  const timestamp = Utilities.formatDate(
+    new Date(),
+    Session.getScriptTimeZone(),
+    'yyyy-MM-dd HH:mm:ss'
+  );
+
+  const updates = {
+    [deckNameCol]: deckName,
+    [systemCol]: system,
+    [lockChipCol]: lockChip || '',
+    [bladeCol]: blade || '',
+    [assistBladeCol]: assistBlade || '',
+    [ratchetCol]: ratchet || '',
+    [bitCol]: bit || '',
+    [descriptionCol]: description,
+    [updatedAtCol]: timestamp
+  };
+
+  for (const [colKey, value] of Object.entries(updates)) {
+    if (colKey === 'undefined' || colKey === 'null') continue;
+    const colNum = parseInt(colKey, 10);
+    if (!isNaN(colNum) && colNum >= 0) {
+      deckSheet.getRange(targetRowIndex, colNum + 1).setValue(value);
+    }
+  }
+
+  return res({ status: 'success', message: 'Deck berhasil diperbarui' });
+}
+
+function toggleDeckActive(data) {
+  const auth = resolveDeckOwner(data);
+  if (!auth.authorized) return res({ status: 'error', message: auth.error });
+
+  const userGoogleId = auth.googleId;
+  const deckSheet = SS.getSheetByName('BladerDecks');
+  if (!deckSheet) return res({ status: 'error', message: 'Sheet BladerDecks tidak ditemukan' });
+
+  const deckId = String(data.deckId || '').trim();
+  if (!deckId) return res({ status: 'error', message: 'deckId wajib diisi' });
+
+  const values = deckSheet.getDataRange().getDisplayValues();
+  if (values.length < 2) return res({ status: 'error', message: 'Data deck tidak ditemukan' });
+
+  const headers = values[0];
+  const rows = values.slice(1);
+  const headerMap = {};
+  headers.forEach((h, i) => {
+    headerMap[String(h).toLowerCase().trim()] = i;
+  });
+
+  const deckIdCol = headerMap['deck_id'];
+  const googleIdCol = headerMap['google_id'];
+  const isActiveCol = headerMap['is_active'];
+
+  let targetRowIndex = -1;
+  for (let i = 0; i < rows.length; i++) {
+    const rowDeckId = deckIdCol !== undefined ? String(rows[i][deckIdCol] || '').trim() : '';
+    const rowGoogleId = googleIdCol !== undefined ? String(rows[i][googleIdCol] || '').trim() : '';
+    if (rowDeckId === deckId && rowGoogleId === userGoogleId) {
+      targetRowIndex = i + 2;
+      break;
+    }
+  }
+
+  if (targetRowIndex < 0) return res({ status: 'error', message: 'Deck tidak ditemukan atau bukan milik Anda' });
+
+  const currentActive = isActiveCol !== undefined ? String(values[targetRowIndex - 1][isActiveCol] || '').toLowerCase().trim() : 'true';
+  const newActive = currentActive === 'true' ? 'FALSE' : 'TRUE';
+
+  if (isActiveCol !== undefined) {
+    deckSheet.getRange(targetRowIndex, isActiveCol + 1).setValue(newActive);
+  }
+
+  return res({ status: 'success', isActive: newActive === 'TRUE', message: newActive === 'TRUE' ? 'Deck diaktifkan' : 'Deck dinonaktifkan' });
+}
+
+function deleteDeck(data) {
+  const auth = resolveDeckOwner(data);
+  if (!auth.authorized) return res({ status: 'error', message: auth.error });
+
+  const deckSheet = SS.getSheetByName('BladerDecks');
+  if (!deckSheet) return res({ status: 'error', message: 'Sheet tidak ditemukan' });
+
+  const values = deckSheet.getDataRange().getDisplayValues();
+  const headers = values[0];
+  let deckIdCol = -1, googleIdCol = -1;
+  
+  headers.forEach((h, i) => {
+    const headerName = String(h).toLowerCase().trim();
+    if (headerName === 'deck_id') deckIdCol = i;
+    if (headerName === 'google_id') googleIdCol = i;
+  });
+
+  let targetRowIndex = -1;
+  for (let i = 1; i < values.length; i++) {
+    if (String(values[i][deckIdCol]).trim() === data.deckId && String(values[i][googleIdCol]).trim() === auth.googleId) {
+      targetRowIndex = i + 1;
+      break;
+    }
+  }
+
+  if (targetRowIndex > -1) {
+    deckSheet.deleteRow(targetRowIndex);
+    return res({ status: 'success', message: 'Deck berhasil dihapus' });
+  }
+  
+  return res({ status: 'error', message: 'Deck tidak ditemukan atau bukan milik Anda' });
+}
+
+function migrateLegacyDeckPartIds() {
+  const deckSheet = SS.getSheetByName('BladerDecks');
+  const partSheet = SS.getSheetByName('BeybladeParts');
+  if (!deckSheet || !partSheet) return res({ status: 'error', message: 'Sheet tidak ditemukan' });
+
+  const deckValues = deckSheet.getDataRange().getDisplayValues();
+  const partValues = partSheet.getDataRange().getDisplayValues();
+  if (deckValues.length < 2 || partValues.length < 2) return res({ status: 'success', migrated: 0, skipped: 0, unresolved: [] });
+
+  const partHeaders = partValues[0];
+  const partRows = partValues.slice(1);
+  const partHeaderMap = {};
+  partHeaders.forEach((h, i) => {
+    partHeaderMap[String(h).toLowerCase().trim()] = i;
+  });
+
+  const partIdCol = partHeaderMap['part_id'];
+  const partTypeCol = partHeaderMap['part_type'];
+  const partSystemCol = partHeaderMap['system'];
+  const partNameCol = partHeaderMap['name'];
+
+  if (partIdCol === undefined || partTypeCol === undefined || partSystemCol === undefined || partNameCol === undefined) {
+    return res({ status: 'error', message: 'Header BeybladeParts tidak lengkap' });
+  }
+
+  const partsByName = {};
+  partRows.forEach(row => {
+    const pid = String(row[partIdCol] || '').trim();
+    const type = String(row[partTypeCol] || '').trim().toLowerCase();
+    const system = String(row[partSystemCol] || '').trim().toUpperCase();
+    const name = String(row[partNameCol] || '').trim();
+    if (!pid || !name) return;
+    const key = `${type}::${system}::${name.toLowerCase()}`;
+    partsByName[key] = pid;
+  });
+
+  const deckHeaders = deckValues[0];
+  const deckRows = deckValues.slice(1);
+  const deckHeaderMap = {};
+  deckHeaders.forEach((h, i) => {
+    deckHeaderMap[String(h).toLowerCase().trim()] = i;
+  });
+
+  const deckIdCol = deckHeaderMap['deck_id'];
+  const systemCol = deckHeaderMap['system'];
+  const lockChipCol = deckHeaderMap['lock_chip'];
+  const bladeCol = deckHeaderMap['blade'];
+  const assistBladeCol = deckHeaderMap['assist_blade'];
+  const ratchetCol = deckHeaderMap['ratchet'];
+  const bitCol = deckHeaderMap['bit'];
+
+  const updates = [];
+  const unresolved = [];
+  let migrated = 0;
+  let skipped = 0;
+
+  deckRows.forEach((row, index) => {
+    const deckId = deckIdCol !== undefined ? String(row[deckIdCol] || '').trim() : '';
+    if (!deckId) return;
+
+    const system = systemCol !== undefined ? String(row[systemCol] || '').toUpperCase().trim() : '';
+    const fields = [
+      { col: lockChipCol, type: 'lock_chip', partType: 'lock_chip', expectedSystem: 'CX' },
+      { col: bladeCol, type: 'blade', partType: 'blade', expectedSystem: system },
+      { col: assistBladeCol, type: 'assist_blade', partType: 'assist_blade', expectedSystem: 'CX' },
+      { col: ratchetCol, type: 'ratchet', partType: 'ratchet', expectedSystem: system },
+      { col: bitCol, type: 'bit', partType: 'bit', expectedSystem: system }
+    ];
+
+    let rowChanged = false;
+
+    fields.forEach(field => {
+      if (field.col === undefined) return;
+      const currentValue = String(row[field.col] || '').trim();
+      if (!currentValue) return;
+
+      const isAlreadyPartId = /^[A-Z]{2}\d{3}$/i.test(currentValue);
+      if (isAlreadyPartId) {
+        skipped++;
+        return;
+      }
+
+      const compatibleSystems = [field.expectedSystem, 'ALL'];
+      let matchedPid = null;
+
+      for (const sys of compatibleSystems) {
+        const key = `${field.partType}::${sys}::${currentValue.toLowerCase()}`;
+        if (partsByName[key]) {
+          matchedPid = partsByName[key];
+          break;
+        }
+      }
+
+      if (matchedPid) {
+        updates.push({ rowIndex: index + 2, colIndex: field.col + 1, value: matchedPid });
+        rowChanged = true;
+        migrated++;
+      } else {
+        unresolved.push({ deckId, field: field.type, value: currentValue });
+      }
+    });
+  });
+
+  updates.forEach(u => {
+    deckSheet.getRange(u.rowIndex, u.colIndex).setValue(u.value);
+  });
+
+  Logger.log('[DECK MIGRATION]', { migrated, skipped, unresolved: unresolved.length });
+  return res({ status: 'success', migrated, skipped, unresolved });
+}
+
+function fixLegacyDeckRow(deckId) {
+  const deckSheet = SS.getSheetByName('BladerDecks');
+  const partSheet = SS.getSheetByName('BeybladeParts');
+  if (!deckSheet || !partSheet) return res({ status: 'error', message: 'Sheet tidak ditemukan' });
+
+  const partsMap = getBeybladePartsMap();
+  const partValues = partSheet.getDataRange().getDisplayValues();
+  const partHeaders = partValues[0];
+  const partHeaderMap = {};
+  partHeaders.forEach((h, i) => { partHeaderMap[String(h).toLowerCase().trim()] = i; });
+  const partNameCol = partHeaderMap['name'];
+  const partIdCol = partHeaderMap['part_id'];
+
+  const partsByName = {};
+  partValues.slice(1).forEach(row => {
+    const pid = String(row[partIdCol] || '').trim();
+    const name = String(row[partNameCol] || '').trim().toLowerCase();
+    if (pid && name) partsByName[name] = pid;
+  });
+
+  const deckValues = deckSheet.getDataRange().getDisplayValues();
+  const deckHeaders = deckValues[0];
+  const deckHeaderMap = {};
+  deckHeaders.forEach((h, i) => { deckHeaderMap[String(h).toLowerCase().trim()] = i; });
+  const deckIdCol = deckHeaderMap['deck_id'];
+  const lockChipCol = deckHeaderMap['lock_chip'];
+  const bladeCol = deckHeaderMap['blade'];
+  const assistBladeCol = deckHeaderMap['assist_blade'];
+  const ratchetCol = deckHeaderMap['ratchet'];
+  const bitCol = deckHeaderMap['bit'];
+
+  const fieldMap = [
+    { col: lockChipCol, name: 'lockChip' },
+    { col: bladeCol, name: 'blade' },
+    { col: assistBladeCol, name: 'assistBlade' },
+    { col: ratchetCol, name: 'ratchet' },
+    { col: bitCol, name: 'bit' }
+  ];
+
+  let targetRowIndex = -1;
+  let rowChanged = false;
+  const updates = [];
+
+  deckValues.slice(1).forEach((row, index) => {
+    const rowDeckId = deckIdCol !== undefined ? String(row[deckIdCol] || '').trim() : '';
+    if (rowDeckId !== deckId) return;
+    targetRowIndex = index + 2;
+
+    fieldMap.forEach(field => {
+      if (field.col === undefined) return;
+      const currentValue = String(row[field.col] || '').trim();
+      if (!currentValue) return;
+      const isAlreadyPartId = /^[A-Z]{2}\d{3}$/i.test(currentValue);
+      if (isAlreadyPartId) return;
+      const matchedPid = partsByName[currentValue.toLowerCase()];
+      if (matchedPid) {
+        updates.push({ rowIndex: targetRowIndex, colIndex: field.col + 1, value: matchedPid, field: field.name, oldValue: currentValue });
+        rowChanged = true;
+      }
+    });
+  });
+
+  if (targetRowIndex < 0) return res({ status: 'error', message: 'Deck tidak ditemukan' });
+
+  updates.forEach(u => deckSheet.getRange(u.rowIndex, u.colIndex).setValue(u.value));
+
+  Logger.log('[DECK FIX ROW]', { deckId, rowIndex: targetRowIndex, updates, rowChanged });
+  return res({ status: 'success', deckId, rowIndex: targetRowIndex, updates, rowChanged });
+}
+
+function getBladerDeckSets(data) {
+  const auth = resolveDeckOwner(data);
+  if (!auth.authorized) return res({ status: 'error', message: auth.error });
+
+  const userGoogleId = auth.googleId;
+  const sheet = SS.getSheetByName('BladerDeckSets');
+  if (!sheet) return res({ status: 'success', deckSets: [] });
+
+  const values = sheet.getDataRange().getDisplayValues();
+  if (values.length < 2) return res({ status: 'success', deckSets: [] });
+
+  const headers = values[0];
+  const rows = values.slice(1);
+  const headerMap = {};
+  headers.forEach((h, i) => {
+    headerMap[String(h).toLowerCase().trim()] = i;
+  });
+
+  const deckSets = rows.map(row => ({
+    deckSetId: String(row[0] || '').trim(),
+    googleId: String(row[1] || '').trim(),
+    setName: String(row[2] || '').trim(),
+    deck1Id: String(row[3] || '').trim(),
+    deck2Id: String(row[4] || '').trim(),
+    deck3Id: String(row[5] || '').trim(),
+    isActive: String(row[6] || '').toLowerCase().trim() === 'true',
+    createdAt: String(row[7] || '').trim(),
+    updatedAt: String(row[8] || '').trim()
+  })).filter(ds => ds.googleId === userGoogleId);
+
+  return res({ status: 'success', deckSets });
+}
+
+function createBladerDeckSet(data) {
+  const auth = resolveDeckOwner(data);
+  if (!auth.authorized) return res({ status: 'error', message: auth.error });
+
+  const userGoogleId = auth.googleId;
+  const sheet = SS.getSheetByName('BladerDeckSets');
+  if (!sheet) return res({ status: 'error', message: 'Sheet BladerDeckSets tidak ditemukan' });
+
+  const deck1Id = String(data.deck1Id || '').trim();
+  const deck2Id = String(data.deck2Id || '').trim();
+  const deck3Id = String(data.deck3Id || '').trim();
+
+  if (!deck1Id || !deck2Id || !deck3Id) {
+    return res({ status: 'error', message: '3 deck ID wajib diisi untuk deck set' });
+  }
+
+  const now = new Date();
+  const timestamp = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+
+  sheet.appendRow([
+    generateShortDeckId(),
+    userGoogleId,
+    data.setName || '',
+    deck1Id,
+    deck2Id,
+    deck3Id,
+    'TRUE',
+    timestamp,
+    timestamp
+  ]);
+
+  return res({ status: 'success', message: 'Deck set berhasil dibuat' });
+}
+
+function ensurePublicProfileId(playerSheet) {
+  if (!playerSheet) return res({ status: 'error', message: 'Sheet Players tidak ditemukan' });
+  const values = playerSheet.getDataRange().getDisplayValues();
+  if (values.length < 2) return res({ status: 'success', updated: 0, skipped: 0 });
+
+  const headers = values[0];
+  const headerMap = {};
+  headers.forEach((h, i) => {
+    headerMap[String(h).toLowerCase().trim()] = i;
+  });
+
+  const publicProfileIdCol = headerMap['public_profile_id'];
+  if (publicProfileIdCol === undefined) return res({ status: 'error', message: 'Kolom public_profile_id tidak ditemukan' });
+
+  const existingIds = new Set();
+  const updates = [];
+  let skipped = 0;
+
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+    const currentId = String(row[publicProfileIdCol] || '').trim();
+    if (currentId) {
+      existingIds.add(currentId);
+      skipped++;
+      continue;
+    }
+
+    let newId;
+    do {
+      newId = generateShortId();
+    } while (existingIds.has(newId));
+
+    existingIds.add(newId);
+    updates.push({ rowIndex: i + 1, colIndex: publicProfileIdCol + 1, value: newId });
+  }
+
+  updates.forEach(u => {
+    playerSheet.getRange(u.rowIndex, u.colIndex).setValue(u.value);
+  });
+
+  return res({ status: 'success', updated: updates.length, skipped });
+}
+
+function getPlayerByPublicProfileId(profileId) {
+  const playerSheet = SS.getSheetByName("Players");
+  if (!playerSheet) return null;
+
+  const values = playerSheet.getDataRange().getDisplayValues();
+  if (values.length < 2) return null;
+
+  const headers = values[0];
+  const headerMap = {};
+  headers.forEach((h, i) => {
+    headerMap[String(h).toLowerCase().trim()] = i;
+  });
+
+  const publicProfileIdCol = headerMap['public_profile_id'];
+  const googleIdCol = headerMap['google_id'] !== undefined ? headerMap['google_id'] : headerMap['googleid'];
+  const emailCol = headerMap['email'];
+  const nicknameCol = headerMap['nickname'];
+  const photoCol = headerMap['photo_url'] !== undefined ? headerMap['photo_url'] : (headerMap['foto'] !== undefined ? headerMap['foto'] : headerMap['photo']);
+  const roleCol = headerMap['role'];
+  const sloganCol = headerMap['slogan'];
+
+  if (publicProfileIdCol === undefined) return null;
+
+  const targetRow = values.slice(1).find(row => {
+    return String(row[publicProfileIdCol] || '').trim() === String(profileId || '').trim();
+  });
+
+  if (!targetRow) return null;
+
+  return {
+    row: targetRow,
+    googleId: googleIdCol !== undefined ? String(targetRow[googleIdCol] || '').trim() : '',
+    email: emailCol !== undefined ? String(targetRow[emailCol] || '').trim() : '',
+    nickname: nicknameCol !== undefined ? String(targetRow[nicknameCol] || '') : '',
+    photo: photoCol !== undefined ? String(targetRow[photoCol] || '') : '',
+    role: roleCol !== undefined ? String(targetRow[roleCol] || '') : '',
+    slogan: sloganCol !== undefined ? String(targetRow[sloganCol] || '') : ''
+  };
+}
+
+function getBladers() {
+  try {
+    const playerSheet = SS.getSheetByName("Players");
+    const boardSheet = SS.getSheetByName("Leaderboard");
+    const adminSheet = SS.getSheetByName("Admins");
+
+    if (!playerSheet) return res({ status: 'success', bladers: [] });
+
+    const playerValues = playerSheet.getDataRange().getDisplayValues();
+    if (playerValues.length < 2) return res({ status: 'success', bladers: [] });
+
+    const playerHeaders = playerValues[0];
+    const playerRows = playerValues.slice(1);
+
+    const playerMap = {};
+    playerHeaders.forEach((h, i) => {
+      playerMap[String(h).toLowerCase().trim()] = i;
+    });
+
+    const googleIdCol = playerMap['google_id'] !== undefined ? playerMap['google_id'] : playerMap['googleid'];
+    const emailCol = playerMap['email'];
+    const nicknameCol = playerMap['nickname'];
+    const photoCol = playerMap['photo_url'] !== undefined ? playerMap['photo_url'] : (playerMap['foto'] !== undefined ? playerMap['foto'] : playerMap['photo']);
+    const publicProfileIdCol = playerMap['public_profile_id'];
+
+    const admins = adminSheet ? adminSheet.getDataRange().getDisplayValues().flat().map(a => a.toString().toLowerCase()) : [];
+
+    const players = playerRows.map(row => {
+      const gId = googleIdCol !== undefined ? String(row[googleIdCol] || '').trim() : '';
+      const email = emailCol !== undefined ? String(row[emailCol] || '').trim() : '';
+      const isAdmin = admins.some(a => a && a === email.toLowerCase());
+      return {
+        googleId: gId,
+        nickname: nicknameCol !== undefined ? String(row[nicknameCol] || '') : '',
+        foto: photoCol !== undefined ? String(row[photoCol] || '') : '',
+        role: isAdmin ? 'Admin' : 'Blader',
+        public_profile_id: publicProfileIdCol !== undefined ? String(row[publicProfileIdCol] || '').trim() : ''
+      };
+    }).filter(b => b.googleId);
+
+    let leaderboardMap = {};
+    if (boardSheet) {
+      const boardValues = boardSheet.getDataRange().getDisplayValues();
+      if (boardValues.length >= 2) {
+        const boardHeaders = boardValues[0];
+        const boardRows = boardValues.slice(1);
+        const boardHeaderMap = {};
+        boardHeaders.forEach((h, i) => {
+          boardHeaderMap[String(h).toLowerCase().trim()] = i;
+        });
+
+        const boardIdCol = boardHeaderMap['google_id'] !== undefined ? boardHeaderMap['google_id'] : boardHeaderMap['googleid'];
+        const pointCol = boardHeaderMap['point'];
+        const pointFinishCol = boardHeaderMap['point_finish'] !== undefined ? boardHeaderMap['point_finish'] : boardHeaderMap['pointfinish'];
+        const prevRankCol = boardHeaderMap['previous_rank'];
+
+        const entries = [];
+        boardRows.forEach(row => {
+          const gId = boardIdCol !== undefined ? String(row[boardIdCol] || '').trim() : '';
+          if (!gId) return;
+          const point = pointCol !== undefined ? Number(row[pointCol]) || 0 : 0;
+          const pointFinish = pointFinishCol !== undefined ? Number(row[pointFinishCol]) || 0 : 0;
+          const previousRank = prevRankCol !== undefined ? (String(row[prevRankCol] || '').trim() ? Number(row[prevRankCol]) : null) : null;
+          entries.push({ googleId: gId, point, pointFinish, previousRank });
+        });
+
+        entries.sort((a, b) => {
+          if (b.point !== a.point) return b.point - a.point;
+          return b.pointFinish - a.pointFinish;
+        });
+
+        entries.forEach((entry, index) => {
+          const currentRank = index + 1;
+          let status = 'stay';
+          if (entry.previousRank === null || entry.previousRank === undefined || String(entry.previousRank) === '') {
+            status = 'new';
+          } else if (entry.previousRank > currentRank) {
+            status = 'up';
+          } else if (entry.previousRank < currentRank) {
+            status = 'down';
+          }
+          leaderboardMap[entry.googleId] = {
+            point: entry.point,
+            pointFinish: entry.pointFinish,
+            rank: currentRank,
+            status: status
+          };
+        });
+      }
+    }
+
+    const bladers = players.map(b => {
+      const lb = leaderboardMap[b.googleId];
+      return {
+        googleId: b.googleId,
+        public_profile_id: b.public_profile_id,
+        nickname: b.nickname,
+        foto: b.foto,
+        role: b.role,
+        point: lb ? lb.point : 0,
+        pointFinish: lb ? lb.pointFinish : 0,
+        rank: lb ? lb.rank : null,
+        leaderboardStatus: lb ? lb.status : ''
+      };
+    });
+
+    bladers.sort((a, b) => {
+      if (a.rank === null && b.rank === null) return 0;
+      if (a.rank === null) return 1;
+      if (b.rank === null) return -1;
+      return a.rank - b.rank;
+    });
+
+    return res({ status: 'success', bladers });
+  } catch (err) {
+    console.error('getBladers error: ' + err.message);
+    return res({ status: 'error', message: 'Gagal memuat daftar blader', bladers: [] });
+  }
+}
+
+function getBladerProfile(data) {
+  const profileId = String(data.profileId || '').trim();
+  if (!profileId) return res({ status: 'error', message: 'profileId wajib diisi' });
+
+  Logger.log('[PROFILE] START ' + profileId);
+
+  const player = getPlayerByPublicProfileId(profileId);
+  if (!player) {
+    return res({ status: 'error', message: 'BLADER NOT FOUND' });
+  }
+
+  const googleId = player.googleId;
+  const nickname = player.nickname;
+  const photo = player.photo;
+  const role = player.role;
+  const slogan = player.slogan;
+
+  const boardSheet = SS.getSheetByName("Leaderboard");
+  let leaderboard = null;
+  if (boardSheet) {
+    const boardValues = boardSheet.getDataRange().getDisplayValues();
+    if (boardValues.length >= 2) {
+      const boardHeaders = boardValues[0];
+      const boardRows = boardValues.slice(1);
+      const boardHeaderMap = {};
+      boardHeaders.forEach((h, i) => {
+        boardHeaderMap[String(h).toLowerCase().trim()] = i;
+      });
+
+      const boardIdCol = boardHeaderMap['google_id'] !== undefined ? boardHeaderMap['google_id'] : boardHeaderMap['googleid'];
+      const pointCol = boardHeaderMap['point'];
+      const pointFinishCol = boardHeaderMap['point_finish'] !== undefined ? boardHeaderMap['point_finish'] : boardHeaderMap['pointfinish'];
+      const prevRankCol = boardHeaderMap['previous_rank'];
+
+      const allEntries = [];
+      boardRows.forEach(row => {
+        const gId = boardIdCol !== undefined ? String(row[boardIdCol] || '').trim() : '';
+        if (!gId) return;
+        const point = pointCol !== undefined ? Number(row[pointCol]) || 0 : 0;
+        const pointFinish = pointFinishCol !== undefined ? Number(row[pointFinishCol]) || 0 : 0;
+        const previousRank = prevRankCol !== undefined ? (String(row[prevRankCol] || '').trim() ? Number(row[prevRankCol]) : null) : null;
+        allEntries.push({ googleId: gId, point, pointFinish, previousRank });
+      });
+
+      allEntries.sort((a, b) => {
+        if (b.point !== a.point) return b.point - a.point;
+        return b.pointFinish - a.pointFinish;
+      });
+
+      const playerEntry = allEntries.find(e => e.googleId === googleId);
+      if (playerEntry) {
+        const rank = allEntries.findIndex(e => e === playerEntry) + 1;
+        let status = 'stay';
+        if (playerEntry.previousRank === null || playerEntry.previousRank === undefined || String(playerEntry.previousRank) === '') {
+          status = 'new';
+        } else if (playerEntry.previousRank > rank) {
+          status = 'up';
+        } else if (playerEntry.previousRank < rank) {
+          status = 'down';
+        }
+        leaderboard = {
+          rank: rank,
+          point: playerEntry.point,
+          pointFinish: playerEntry.pointFinish,
+          status: status
+        };
+      }
+    }
+  }
+
+  const eventSheet = SS.getSheetByName("Events");
+  let events = [];
+  if (eventSheet) {
+    const eventValues = eventSheet.getDataRange().getValues();
+    if (eventValues.length >= 2) {
+      const eventHeaders = eventValues[0];
+      const eventRows = eventValues.slice(1);
+      const eventHeaderMap = {};
+      eventHeaders.forEach((h, i) => {
+        eventHeaderMap[String(h).toLowerCase().trim()] = i;
+      });
+
+      const eventIdCol = eventHeaderMap['event_id'] !== undefined ? eventHeaderMap['event_id'] : eventHeaderMap['id'];
+      const eventNamaCol = eventHeaderMap['nama'];
+      const eventDateCol = eventHeaderMap['tanggal_event'];
+      const eventStatusCol = eventHeaderMap['status'];
+
+      const tz = Session.getScriptTimeZone();
+      events = eventRows.map(row => {
+        const rawDate = eventDateCol !== undefined ? row[eventDateCol] : '';
+        let eventDateTimestamp = 0;
+        let eventDateDisplay = '';
+
+        if (rawDate instanceof Date) {
+          eventDateTimestamp = rawDate.getTime();
+          eventDateDisplay = Utilities.formatDate(rawDate, tz, "d MMMM yyyy");
+        } else if (rawDate) {
+          eventDateDisplay = String(rawDate).trim();
+          const parsed = new Date(rawDate);
+          if (!isNaN(parsed.getTime())) {
+            eventDateTimestamp = parsed.getTime();
+          }
+        }
+
+        return {
+          eventId: String(row[eventIdCol] || '').trim(),
+          nama: String(row[eventNamaCol] || '').trim(),
+          tanggal_event: eventDateDisplay,
+          tanggal_event_timestamp: eventDateTimestamp,
+          status: String(row[eventStatusCol] || '').toLowerCase().trim()
+        };
+      }).filter(e => e.eventId);
+    }
+  }
+
+  events.sort((a, b) => {
+    const tsA = a.tanggal_event_timestamp || 0;
+    const tsB = b.tanggal_event_timestamp || 0;
+    if (tsB !== tsA) return tsB - tsA;
+    return b.eventId.localeCompare(a.eventId);
+  });
+
+  Logger.log('[PROFILE] INDEX READY');
+  Logger.log('[PROFILE] EVENTS=' + events.length);
+
+  const resultSheetIndex = getTournamentResultSheetIndex();
+  const recentResults = [];
+  let tournamentsPlayed = 0;
+
+  try {
+    for (const event of events) {
+      const resultSheetName = resultSheetIndex[event.eventId];
+      if (!resultSheetName) continue;
+
+      const resultSheet = SS.getSheetByName(resultSheetName);
+      if (!resultSheet) continue;
+
+      const resultValues = resultSheet.getDataRange().getDisplayValues();
+      if (resultValues.length < 3) continue;
+
+      const row2Headers = resultValues[1].map(h => String(h || '').toLowerCase().trim());
+      const googleIdColIdx = row2Headers.indexOf('google id');
+      const rankColIdx = row2Headers.indexOf('rank');
+      const pointColIdx = row2Headers.indexOf('point');
+      const pointFinishColIdx = row2Headers.indexOf('point finish');
+
+      if (googleIdColIdx < 0 || rankColIdx < 0) continue;
+
+      let found = false;
+      for (let i = 2; i < resultValues.length; i++) {
+        const rowGoogleId = String(resultValues[i][googleIdColIdx] || '').trim();
+        if (rowGoogleId !== googleId) continue;
+
+        found = true;
+        tournamentsPlayed++;
+
+        if (recentResults.length < 5) {
+          const rank = String(resultValues[i][rankColIdx] || '').trim();
+          const point = pointColIdx >= 0 ? String(resultValues[i][pointColIdx] || '').trim() : '';
+          const pointFinish = pointFinishColIdx >= 0 ? String(resultValues[i][pointFinishColIdx] || '').trim() : '';
+
+          recentResults.push({
+            eventId: event.eventId,
+            eventName: event.nama,
+            eventDate: event.tanggal_event,
+            rank: rank,
+            point: point,
+            pointFinish: pointFinish
+          });
+        }
+        break;
+      }
+    }
+  } catch (e) {
+    Logger.log('[PROFILE] RECENT RESULTS FALLBACK: ' + e.toString());
+  }
+
+  Logger.log('[PROFILE] RESULTS FOUND=' + tournamentsPlayed);
+  Logger.log('[PROFILE] END');
+
+  return res({
+    status: 'success',
+    player: {
+      profileId: profileId,
+      nickname: nickname,
+      photoUrl: photo,
+      role: role,
+      slogan: slogan
+    },
+    leaderboard: leaderboard || {
+      rank: null,
+      point: 0,
+      pointFinish: 0,
+      status: ''
+    },
+    tournamentSummary: {
+      tournamentsPlayed: tournamentsPlayed
+    },
+    recentResults: recentResults
+  });
+}
+
+function rolloverLeaderboard() {
+  try {
+    const boardSheet = SS.getSheetByName("Leaderboard");
+    if (!boardSheet) return res({ status: 'error', message: 'Sheet Leaderboard tidak ditemukan' });
+
+    const values = boardSheet.getDataRange().getDisplayValues();
+    if (values.length < 2) return res({ status: 'success', message: 'Leaderboard kosong' });
+
+    const headers = values[0];
+    const rows = values.slice(1);
+    const map = {};
+    headers.forEach((h, i) => {
+      map[String(h).toLowerCase().trim()] = i;
+    });
+
+    const idCol = map['google_id'] !== undefined ? map['google_id'] : map['googleid'];
+    const pointCol = map['point'];
+    const pointFinishCol = map['point_finish'] !== undefined ? map['point_finish'] : map['pointfinish'];
+    const prevRankCol = map['previous_rank'];
+    const statusCol = map['status'];
+
+    if (idCol === undefined || pointCol === undefined || pointFinishCol === undefined) {
+      return res({ status: 'error', message: 'Header Leaderboard tidak lengkap' });
+    }
+
+    const entries = [];
+    rows.forEach(row => {
+      const gId = String(row[idCol] || '').trim();
+      if (!gId) return;
+      entries.push({
+        googleId: gId,
+        point: Number(row[pointCol]) || 0,
+        pointFinish: Number(row[pointFinishCol]) || 0
+      });
+    });
+
+    entries.sort((a, b) => {
       if (b.point !== a.point) return b.point - a.point;
       return b.pointFinish - a.pointFinish;
     });
 
-    // Kirim data yang sudah diurutkan
-    return res(finalData);
+    entries.forEach((entry, index) => {
+      const currentRank = index + 1;
+      const rowIndex = rows.findIndex(r => String(r[idCol] || '').trim() === entry.googleId);
+      if (rowIndex === -1) return;
 
+      const sheetRow = rowIndex + 2;
+      if (prevRankCol !== undefined) {
+        boardSheet.getRange(sheetRow, prevRankCol + 1).setValue(currentRank);
+      }
+      if (pointCol !== undefined) {
+        boardSheet.getRange(sheetRow, pointCol + 1).setValue(0);
+      }
+      if (pointFinishCol !== undefined) {
+        boardSheet.getRange(sheetRow, pointFinishCol + 1).setValue(0);
+      }
+      if (statusCol !== undefined) {
+        boardSheet.getRange(sheetRow, statusCol + 1).setValue('new');
+      }
+    });
+
+    return res({ status: 'success', message: 'Rollover leaderboard berhasil', affected: entries.length });
   } catch (err) {
-    // Jika terjadi error sistem, kirim array kosong agar React tidak crash
-    return res([]);
+    console.error('rolloverLeaderboard error: ' + err.message);
+    return res({ status: 'error', message: 'Gagal rollover leaderboard: ' + err.message });
+  }
+}
+
+function repairLeaderboardAfterFirstSync() {
+  try {
+    const boardSheet = SS.getSheetByName("Leaderboard");
+    if (!boardSheet) return res({ status: 'error', message: 'Sheet Leaderboard tidak ditemukan' });
+
+    const values = boardSheet.getDataRange().getDisplayValues();
+    if (values.length < 2) return res({ status: 'success', message: 'Leaderboard kosong', repaired: 0 });
+
+    const headers = values[0];
+    const rows = values.slice(1);
+    const map = {};
+    headers.forEach((h, i) => {
+      map[String(h).toLowerCase().trim()] = i;
+    });
+
+    const idCol = map['google_id'] !== undefined ? map['google_id'] : map['googleid'];
+    const prevRankCol = map['previous_rank'];
+    const statusCol = map['status'];
+
+    if (idCol === undefined) {
+      return res({ status: 'error', message: 'Header google_id tidak ditemukan di Leaderboard' });
+    }
+
+    let repaired = 0;
+    rows.forEach((row, index) => {
+      const gId = String(row[idCol] || '').trim();
+      if (!gId) return;
+
+      const sheetRow = index + 2;
+      let changed = false;
+
+      if (prevRankCol !== undefined) {
+        const currentPrevRank = String(row[prevRankCol] || '').trim();
+        if (currentPrevRank !== '') {
+          boardSheet.getRange(sheetRow, prevRankCol + 1).clearContent();
+          changed = true;
+        }
+      }
+
+      if (statusCol !== undefined) {
+        const currentStatus = String(row[statusCol] || '').toLowerCase().trim();
+        if (currentStatus !== 'new') {
+          boardSheet.getRange(sheetRow, statusCol + 1).setValue('new');
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        repaired++;
+      }
+    });
+
+    return res({ status: 'success', message: 'Leaderboard repaired', repaired });
+  } catch (err) {
+    console.error('repairLeaderboardAfterFirstSync error: ' + err.message);
+    return res({ status: 'error', message: 'Gagal repair leaderboard: ' + err.message });
+  }
+}
+
+function repairExcludedLeaderboardPlayer(eventId, googleId) {
+  try {
+    const boardSheet = SS.getSheetByName("Leaderboard");
+    if (!boardSheet) return res({ status: 'error', message: 'Sheet Leaderboard tidak ditemukan' });
+
+    const syncSheet = getOrCreateSyncSheet();
+    const syncValues = syncSheet.getDataRange().getValues();
+    if (syncValues.length < 2) return res({ status: 'success', message: 'Tidak ada sync record', removed: 0 });
+
+    const syncHeaders = syncValues[0];
+    const syncMap = {};
+    syncHeaders.forEach((h, i) => {
+      syncMap[String(h).toLowerCase().trim()] = i;
+    });
+
+    const syncEventIdCol = syncMap['event_id'];
+    const syncGoogleIdCol = syncMap['google_id'];
+    if (syncEventIdCol === undefined || syncGoogleIdCol === undefined) {
+      return res({ status: 'error', message: 'Header sync sheet tidak lengkap' });
+    }
+
+    let syncRowIndex = -1;
+    for (let i = 1; i < syncValues.length; i++) {
+      const sid = String(syncValues[i][syncEventIdCol] || '').trim();
+      const sgid = String(syncValues[i][syncGoogleIdCol] || '').trim();
+      if (sid === eventId && sgid === googleId) {
+        syncRowIndex = i;
+        break;
+      }
+    }
+
+    if (syncRowIndex === -1) {
+      return res({ status: 'success', message: 'Tidak ada sync record untuk event ini', removed: 0 });
+    }
+
+    const eventPoint = Number(syncValues[syncRowIndex][syncMap['point_added']]) || 0;
+    const eventPointFinish = Number(syncValues[syncRowIndex][syncMap['point_finish_added']]) || 0;
+
+    syncSheet.deleteRow(syncRowIndex + 1);
+
+    if (!boardSheet) return res({ status: 'success', message: 'Sync record dihapus', removed: 1 });
+
+    const boardValues = boardSheet.getDataRange().getDisplayValues();
+    if (boardValues.length < 2) return res({ status: 'success', message: 'Sync record dihapus, leaderboard kosong', removed: 1 });
+
+    const boardHeaders = boardValues[0];
+    const boardRows = boardValues.slice(1);
+    const boardMap = {};
+    boardHeaders.forEach((h, i) => {
+      boardMap[String(h).toLowerCase().trim()] = i;
+    });
+
+    const idCol = boardMap['google_id'] !== undefined ? boardMap['google_id'] : boardMap['googleid'];
+    const pointCol = boardMap['point'];
+    const pointFinishCol = boardMap['point_finish'] !== undefined ? boardMap['point_finish'] : boardMap['pointfinish'];
+    const prevRankCol = boardMap['previous_rank'];
+
+    if (idCol === undefined) {
+      return res({ status: 'success', message: 'Sync record dihapus', removed: 1 });
+    }
+
+    let targetRowIndex = -1;
+    for (let i = 0; i < boardRows.length; i++) {
+      const gId = String(boardRows[i][idCol] || '').trim();
+      if (gId === googleId) {
+        targetRowIndex = i;
+        break;
+      }
+    }
+
+    if (targetRowIndex === -1) {
+      return res({ status: 'success', message: 'Sync record dihapus, player tidak ditemukan di leaderboard', removed: 1 });
+    }
+
+    const targetRow = boardRows[targetRowIndex];
+    const currentPoint = Number(targetRow[pointCol]) || 0;
+    const currentPointFinish = Number(targetRow[pointFinishCol]) || 0;
+    const currentPrevRank = prevRankCol !== undefined ? String(targetRow[prevRankCol] || '').trim() : '';
+
+    const otherSyncs = [];
+    for (let i = 1; i < syncValues.length; i++) {
+      if (i === syncRowIndex) continue;
+      const sid = String(syncValues[i][syncEventIdCol] || '').trim();
+      const sgid = String(syncValues[i][syncGoogleIdCol] || '').trim();
+      if (sgid === googleId && sid !== eventId) {
+        otherSyncs.push(sid);
+      }
+    }
+
+    const isExactMatch = currentPoint === eventPoint && currentPointFinish === eventPointFinish;
+    const hasOtherSyncs = otherSyncs.length > 0;
+    const isEmptyPrevRank = currentPrevRank === '';
+
+    if (isExactMatch && !hasOtherSyncs && isEmptyPrevRank) {
+      const sheetRow = targetRowIndex + 2;
+      boardSheet.deleteRow(sheetRow);
+      return res({
+        status: 'success',
+        message: 'Row leaderboard dihapus karena berasal dari sync event ini',
+        removed: 1,
+        action: 'deleted_row',
+        googleId: googleId
+      });
+    }
+
+    if (isExactMatch && !hasOtherSyncs) {
+      const sheetRow = targetRowIndex + 2;
+      if (pointCol !== undefined) {
+        boardSheet.getRange(sheetRow, pointCol + 1).setValue(0);
+      }
+      if (pointFinishCol !== undefined) {
+        boardSheet.getRange(sheetRow, pointFinishCol + 1).setValue(0);
+      }
+      return res({
+        status: 'success',
+        message: 'Point direset karena kemungkinan berasal dari sync event ini',
+        removed: 1,
+        action: 'reset_points',
+        googleId: googleId
+      });
+    }
+
+    return res({
+      status: 'success',
+      message: 'Sync record dihapus. Player memiliki data sebelumnya atau nilai tidak cocok, leaderboard tidak diubah.',
+      removed: 1,
+      action: 'sync_only',
+      googleId: googleId
+    });
+  } catch (err) {
+    console.error('repairExcludedLeaderboardPlayer error: ' + err.message);
+    return res({ status: 'error', message: 'Gagal repair excluded player: ' + err.message });
+  }
+}
+
+function checkTournamentSyncStatus(eventId) {
+  try {
+    const syncSheet = SS.getSheetByName('TournamentLeaderboardSync');
+    if (!syncSheet) {
+      return res({ status: 'success', synced: false, message: 'Sheet sync tidak ditemukan' });
+    }
+
+    const values = syncSheet.getDataRange().getValues();
+    if (values.length < 2) {
+      return res({ status: 'success', synced: false, message: 'Belum ada sync record' });
+    }
+
+    const headers = values[0];
+    const rows = values.slice(1);
+    const map = {};
+    headers.forEach((h, i) => {
+      map[String(h).toLowerCase().trim()] = i;
+    });
+
+    const eventIdCol = map['event_id'];
+    const googleIdCol = map['google_id'];
+
+    if (eventIdCol === undefined || googleIdCol === undefined) {
+      return res({ status: 'error', message: 'Header sync sheet tidak lengkap' });
+    }
+
+    const syncedPlayers = [];
+    rows.forEach(row => {
+      const sid = String(row[eventIdCol] || '').trim();
+      if (sid === eventId) {
+        syncedPlayers.push({
+          googleId: String(row[googleIdCol] || '').trim(),
+          point_added: Number(row[map['point_added']]) || 0,
+          point_finish_added: Number(row[map['point_finish_added']]) || 0
+        });
+      }
+    });
+
+    return res({
+      status: 'success',
+      synced: syncedPlayers.length > 0,
+      count: syncedPlayers.length,
+      players: syncedPlayers
+    });
+  } catch (err) {
+    console.error('checkTournamentSyncStatus error: ' + err.message);
+    return res({ status: 'error', message: 'Gagal cek sync status: ' + err.message });
+  }
+}
+
+function getOrCreateSheet(sheetName, headers) {
+  let sheet = SS.getSheetByName(sheetName);
+  if (!sheet) {
+    sheet = SS.insertSheet(sheetName);
+    if (headers && headers.length > 0) {
+      sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    }
+  }
+  return sheet;
+}
+
+function getOrCreateSyncSheet() {
+  return getOrCreateSheet('TournamentLeaderboardSync', [
+    'event_id',
+    'google_id',
+    'point_added',
+    'point_finish_added',
+    'synced_at'
+  ]);
+}
+
+function isAlreadySynced(eventId, googleId) {
+  try {
+    const syncSheet = SS.getSheetByName('TournamentLeaderboardSync');
+    if (!syncSheet) return false;
+
+    const values = syncSheet.getDataRange().getValues();
+    if (values.length < 2) return false;
+
+    const headers = values[0];
+    const map = {};
+    headers.forEach((h, i) => {
+      map[String(h).toLowerCase().trim()] = i;
+    });
+
+    const eventIdCol = map['event_id'];
+    const googleIdCol = map['google_id'];
+
+    if (eventIdCol === undefined || googleIdCol === undefined) return false;
+
+    for (let i = 1; i < values.length; i++) {
+      const rowEventId = String(values[i][eventIdCol] || '').trim();
+      const rowGoogleId = String(values[i][googleIdCol] || '').trim();
+      if (rowEventId === String(eventId || '').trim() && rowGoogleId === String(googleId || '').trim()) {
+        return true;
+      }
+    }
+    return false;
+  } catch (err) {
+    console.error('isAlreadySynced error: ' + err.message);
+    return false;
+  }
+}
+
+function recordSync(eventId, googleId, pointAdded, pointFinishAdded) {
+  try {
+    const syncSheet = getOrCreateSyncSheet();
+    const now = new Date();
+    syncSheet.appendRow([
+      String(eventId || '').trim(),
+      String(googleId || '').trim(),
+      Number(pointAdded) || 0,
+      Number(pointFinishAdded) || 0,
+      now
+    ]);
+    return true;
+  } catch (err) {
+    console.error('recordSync error: ' + err.message);
+    return false;
+  }
+}
+
+function readTournamentResultSheet(sheetName, expectedEventId) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let sheet = ss.getSheetByName(sheetName);
+    if (!sheet) {
+      return { status: 'error', message: 'Sheet hasil tournament tidak ditemukan: ' + sheetName };
+    }
+
+    const values = sheet.getDataRange().getDisplayValues();
+    if (values.length < 3) {
+      return { status: 'error', message: 'Sheet hasil tournament kosong atau format tidak sesuai' };
+    }
+
+    const resultHeaders = values[1];
+    const resultRows = values.slice(2);
+    const map = {};
+    resultHeaders.forEach((h, i) => {
+      map[String(h || '').trim().toLowerCase()] = i;
+    });
+
+    Logger.log('[PREVIEW RESULT HEADER] ' + JSON.stringify(resultHeaders));
+    Logger.log('[PREVIEW RESULT ROWS] ' + resultRows.length);
+
+    const requiredHeaders = ['rank', 'point', 'google id', 'nama', 'win - lose', 'total win', 'point finish', 'event id'];
+    const missingHeaders = requiredHeaders.filter(h => map[h] === undefined);
+    if (missingHeaders.length > 0) {
+      return { status: 'error', message: 'Header tidak ditemukan di sheet: ' + missingHeaders.join(', ') };
+    }
+
+    const rankCol = map['rank'];
+    const pointCol = map['point'];
+    const googleIdCol = map['google id'];
+    const namaCol = map['nama'];
+    const pointFinishCol = map['point finish'];
+    const eventIdCol = map['event id'];
+
+    const results = [];
+    const warnings = [];
+
+    resultRows.forEach((row, index) => {
+      const rowEventId = String(row[eventIdCol] || '').trim();
+      const googleId = String(row[googleIdCol] || '').trim();
+
+      if (!rowEventId && !googleId) {
+        return;
+      }
+
+      if (expectedEventId && rowEventId && rowEventId !== String(expectedEventId).trim()) {
+        warnings.push({
+          row: index + 3,
+          message: 'Event ID berbeda: expect=' + expectedEventId + ', actual=' + rowEventId
+        });
+        return;
+      }
+
+      if (!googleId) {
+        warnings.push({
+          row: index + 3,
+          message: 'Google ID kosong pada row ' + (index + 3)
+        });
+        return;
+      }
+
+      const rank = Number(row[rankCol]) || 0;
+      const point = Number(row[pointCol]) || 0;
+      const pointFinish = Number(row[pointFinishCol]) || 0;
+      const nama = String(row[namaCol] || '').trim();
+
+      results.push({
+        googleId,
+        nama,
+        rank,
+        point,
+        pointFinish,
+        row: index + 3
+      });
+    });
+
+    return {
+      status: 'success',
+      results,
+      warnings,
+      totalRows: resultRows.length,
+      processedRows: results.length
+    };
+  } catch (err) {
+    console.error('readTournamentResultSheet error: ' + err.message);
+    return { status: 'error', message: 'Gagal membaca sheet hasil tournament: ' + err.message };
+  }
+}
+
+function getPlayerNickname(googleId) {
+  try {
+    const playerSheet = SS.getSheetByName("Players");
+    if (!playerSheet) return '';
+    
+    const values = playerSheet.getDataRange().getDisplayValues();
+    if (values.length < 2) return '';
+    
+    const headers = values[0];
+    const rows = values.slice(1);
+    const map = {};
+    headers.forEach((h, i) => {
+      map[String(h).toLowerCase().trim()] = i;
+    });
+    
+    const googleIdCol = map['google_id'] !== undefined ? map['google_id'] : map['googleid'];
+    const nicknameCol = map['nickname'] !== undefined ? map['nickname'] : map['nama'];
+    
+    if (googleIdCol === undefined || nicknameCol === undefined) return '';
+    
+    for (let i = 0; i < rows.length; i++) {
+      const rowGoogleId = String(rows[i][googleIdCol] || '').trim();
+      if (rowGoogleId === googleId) {
+        return String(rows[i][nicknameCol] || '').trim();
+      }
+    }
+  } catch (e) {
+    console.error('Gagal baca nickname: ' + e.message);
+  }
+  return '';
+}
+
+function calculateLeaderboardPreview(leaderboardRows, headerMap, tournamentResults, expectedEventId) {
+  try {
+    const idCol = headerMap['google_id'] !== undefined ? headerMap['google_id'] : headerMap['googleid'];
+    const pointCol = headerMap['point'];
+    const pointFinishCol = headerMap['point_finish'] !== undefined ? headerMap['point_finish'] : headerMap['pointfinish'];
+    const prevRankCol = headerMap['previous_rank'];
+    const statusCol = headerMap['status'];
+
+    const existingPlayers = {};
+    leaderboardRows.forEach((row, index) => {
+      const gId = String(row[idCol] || '').trim();
+      if (!gId) return;
+      existingPlayers[gId] = {
+        rowIndex: index,
+        oldPoint: Number(row[pointCol]) || 0,
+        oldPointFinish: Number(row[pointFinishCol]) || 0,
+        previousRank: prevRankCol !== undefined ? (String(row[prevRankCol] || '').trim() ? Number(row[prevRankCol]) : null) : (index + 1)
+      };
+    });
+
+    const simulatedPlayers = JSON.parse(JSON.stringify(existingPlayers));
+
+    tournamentResults.forEach(r => {
+      const gId = String(r.googleId || '').trim();
+      if (!gId) return;
+      if (!simulatedPlayers[gId]) {
+        simulatedPlayers[gId] = {
+          rowIndex: -1,
+          oldPoint: 0,
+          oldPointFinish: 0,
+          previousRank: null
+        };
+      }
+      simulatedPlayers[gId].addedPoint = Number(r.point) || 0;
+      simulatedPlayers[gId].addedPointFinish = Number(r.pointFinish) || 0;
+      simulatedPlayers[gId].newPoint = (simulatedPlayers[gId].oldPoint || 0) + simulatedPlayers[gId].addedPoint;
+      simulatedPlayers[gId].newPointFinish = (simulatedPlayers[gId].oldPointFinish || 0) + simulatedPlayers[gId].addedPointFinish;
+      simulatedPlayers[gId].nama = r.nama || '';
+    });
+
+    Object.keys(simulatedPlayers).forEach(gId => {
+      if (simulatedPlayers[gId].addedPoint === undefined) {
+        simulatedPlayers[gId].addedPoint = 0;
+      }
+      if (simulatedPlayers[gId].addedPointFinish === undefined) {
+        simulatedPlayers[gId].addedPointFinish = 0;
+      }
+      if (simulatedPlayers[gId].newPoint === undefined) {
+        simulatedPlayers[gId].newPoint = simulatedPlayers[gId].oldPoint || 0;
+      }
+      if (simulatedPlayers[gId].newPointFinish === undefined) {
+        simulatedPlayers[gId].newPointFinish = simulatedPlayers[gId].oldPointFinish || 0;
+      }
+    });
+
+    const sortedEntries = Object.keys(simulatedPlayers).map(gId => ({
+      googleId: gId,
+      ...simulatedPlayers[gId]
+    }));
+
+    sortedEntries.sort((a, b) => {
+      if (b.newPoint !== a.newPoint) return b.newPoint - a.newPoint;
+      if (b.newPointFinish !== a.newPointFinish) return b.newPointFinish - a.newPointFinish;
+      return a.googleId.localeCompare(b.googleId);
+    });
+
+    const changes = [];
+    sortedEntries.forEach((entry, index) => {
+      const newRank = index + 1;
+      const prevRank = entry.previousRank;
+      let movement = 'stay';
+      if (prevRank === null || prevRank === undefined || String(prevRank) === '') {
+        movement = 'new';
+      } else if (newRank < prevRank) {
+        movement = 'up';
+      } else if (newRank > prevRank) {
+        movement = 'down';
+      }
+
+      changes.push({
+        googleId: entry.googleId,
+        nama: entry.nama || '',
+        oldPoint: entry.oldPoint,
+        addedPoint: entry.addedPoint || 0,
+        newPoint: entry.newPoint,
+        oldPointFinish: entry.oldPointFinish,
+        addedPointFinish: entry.addedPointFinish || 0,
+        newPointFinish: entry.newPointFinish,
+        previousRank: prevRank,
+        newRank: newRank,
+        movement: movement
+      });
+    });
+
+    return { status: 'success', changes };
+  } catch (err) {
+    console.error('calculateLeaderboardPreview error: ' + err.message);
+    return { status: 'error', message: 'Gagal menghitung preview: ' + err.message };
+  }
+}
+
+function previewTournamentResultsToLeaderboard(data) {
+  try {
+    const eventId = String(data.eventId || '').trim();
+    const sheetName = String(data.sheetName || '').trim();
+    if (!eventId) return res({ status: 'error', message: 'eventId wajib diisi' });
+    if (!sheetName) return res({ status: 'error', message: 'sheetName wajib diisi' });
+
+    const excludedGoogleIds = new Set((data.excludedGoogleIds || []).map(id => String(id || '').trim()).filter(Boolean));
+
+    const boardSheet = SS.getSheetByName("Leaderboard");
+    if (!boardSheet) return res({ status: 'error', message: 'Sheet Leaderboard tidak ditemukan' });
+
+    const boardValues = boardSheet.getDataRange().getDisplayValues();
+    if (boardValues.length < 2) return res({ status: 'error', message: 'Leaderboard kosong' });
+
+    const boardHeaders = boardValues[0];
+    const boardRows = boardValues.slice(1);
+    const boardMap = {};
+    boardHeaders.forEach((h, i) => {
+      boardMap[String(h).toLowerCase().trim()] = i;
+    });
+
+    const idCol = boardMap['google_id'] !== undefined ? boardMap['google_id'] : boardMap['googleid'];
+    const pointCol = boardMap['point'];
+    const pointFinishCol = boardMap['point_finish'] !== undefined ? boardMap['point_finish'] : boardMap['pointfinish'];
+    const prevRankCol = boardMap['previous_rank'];
+    const statusCol = boardMap['status'];
+
+    if (idCol === undefined || pointCol === undefined || pointFinishCol === undefined) {
+      return res({ status: 'error', message: 'Header Leaderboard tidak lengkap' });
+    }
+
+    const syncSheet = SS.getSheetByName('TournamentLeaderboardSync');
+    const alreadySynced = [];
+    if (syncSheet) {
+      const syncValues = syncSheet.getDataRange().getValues();
+      if (syncValues.length >= 2) {
+        const syncHeaders = syncValues[0];
+        const syncMap = {};
+        syncHeaders.forEach((h, i) => {
+          syncMap[String(h).toLowerCase().trim()] = i;
+        });
+        const syncEventIdCol = syncMap['event_id'];
+        const syncGoogleIdCol = syncMap['google_id'];
+        if (syncEventIdCol !== undefined && syncGoogleIdCol !== undefined) {
+          syncValues.slice(1).forEach(row => {
+            const sid = String(row[syncEventIdCol] || '').trim();
+            const sgid = String(row[syncGoogleIdCol] || '').trim();
+            if (sid === eventId) {
+              alreadySynced.push({ eventId: sid, googleId: sgid });
+            }
+          });
+        }
+      }
+    }
+
+    const sheetReadResult = readTournamentResultSheet(sheetName, eventId);
+    if (sheetReadResult.status === 'error') {
+      return res(sheetReadResult);
+    }
+
+    const filteredResults = sheetReadResult.results.filter(r => {
+      const gId = String(r.googleId || '').trim();
+      if (!gId) return false;
+      if (excludedGoogleIds.has(gId)) return false;
+      return !alreadySynced.some(s => s.eventId === eventId && s.googleId === gId);
+    });
+
+    const excludedFromResults = sheetReadResult.results.filter(r => {
+      const gId = String(r.googleId || '').trim();
+      return excludedGoogleIds.has(gId);
+    });
+
+    const alreadySyncedInResults = sheetReadResult.results.filter(r => {
+      const gId = String(r.googleId || '').trim();
+      if (!gId) return false;
+      return alreadySynced.some(s => s.eventId === eventId && s.googleId === gId);
+    }).map(r => r.googleId);
+
+    const preview = calculateLeaderboardPreview(boardRows, boardMap, filteredResults, eventId);
+    if (preview.status === 'error') {
+      return res(preview);
+    }
+
+    const tournamentParticipantIds = new Set((filteredResults || []).map(r => String(r.googleId || '').trim()).filter(Boolean));
+
+    const enrichedChanges = (preview.changes || []).map(c => {
+      const nickname = getPlayerNickname(c.googleId);
+      const isTournamentParticipant = tournamentParticipantIds.has(String(c.googleId || '').trim());
+      const isExcluded = excludedGoogleIds.has(String(c.googleId || '').trim());
+      return {
+        ...c,
+        nickname: nickname || c.nama || '',
+        displayName: nickname || c.nama || c.googleId,
+        isTournamentParticipant: isTournamentParticipant,
+        isExcluded: isExcluded
+      };
+    });
+
+    const tournamentParticipants = enrichedChanges.filter(c => c.isTournamentParticipant && !c.isExcluded);
+    const excludedPlayers = enrichedChanges.filter(c => c.isExcluded);
+    const unchangedPlayers = enrichedChanges.filter(c => !c.isTournamentParticipant && !c.isExcluded);
+
+    return res({
+      status: 'success',
+      dryRun: true,
+      eventId: eventId,
+      sheetName: sheetName,
+      changes: enrichedChanges,
+      tournamentParticipants: tournamentParticipants,
+      excludedPlayers: excludedPlayers,
+      unchangedPlayers: unchangedPlayers,
+      summary: {
+        totalRows: sheetReadResult.totalRows,
+        processedRows: sheetReadResult.processedRows,
+        tournamentParticipants: sheetReadResult.processedRows,
+        playersToSync: tournamentParticipants.length,
+        excludedPlayers: excludedPlayers.length,
+        leaderboardAfterUpdate: enrichedChanges.length,
+        playersReceivingPoints: filteredResults.length,
+        unchangedPlayers: unchangedPlayers.length
+      },
+      warnings: sheetReadResult.warnings,
+      alreadySynced: alreadySyncedInResults
+    });
+  } catch (err) {
+    console.error('previewTournamentResultsToLeaderboard error: ' + err.message);
+    return res({ status: 'error', message: 'Gagal preview tournament results: ' + err.message });
+  }
+}
+
+function applyTournamentResultsToLeaderboard(data) {
+  try {
+    const eventId = String(data.eventId || '').trim();
+    const sheetName = String(data.sheetName || '').trim();
+    if (!eventId) return res({ status: 'error', message: 'eventId wajib diisi' });
+    if (!sheetName) return res({ status: 'error', message: 'sheetName wajib diisi' });
+
+    const excludedGoogleIds = new Set((data.excludedGoogleIds || []).map(id => String(id || '').trim()).filter(Boolean));
+
+    const boardSheet = SS.getSheetByName("Leaderboard");
+    if (!boardSheet) return res({ status: 'error', message: 'Sheet Leaderboard tidak ditemukan' });
+
+    const boardValues = boardSheet.getDataRange().getDisplayValues();
+    if (boardValues.length < 2) return res({ status: 'error', message: 'Leaderboard kosong' });
+
+    const boardHeaders = boardValues[0];
+    const boardRows = boardValues.slice(1);
+    const boardMap = {};
+    boardHeaders.forEach((h, i) => {
+      boardMap[String(h).toLowerCase().trim()] = i;
+    });
+
+    const idCol = boardMap['google_id'] !== undefined ? boardMap['google_id'] : boardMap['googleid'];
+    const pointCol = boardMap['point'];
+    const pointFinishCol = boardMap['point_finish'] !== undefined ? boardMap['point_finish'] : boardMap['pointfinish'];
+    const prevRankCol = boardMap['previous_rank'];
+    const statusCol = boardMap['status'];
+
+    if (idCol === undefined || pointCol === undefined || pointFinishCol === undefined) {
+      return res({ status: 'error', message: 'Header Leaderboard tidak lengkap' });
+    }
+
+    const sheetReadResult = readTournamentResultSheet(sheetName, eventId);
+    if (sheetReadResult.status === 'error') {
+      return res(sheetReadResult);
+    }
+
+    const resultsToApply = [];
+    const skippedSynced = [];
+    const skippedNoGoogleId = [];
+    const skippedExcluded = [];
+
+    sheetReadResult.results.forEach(r => {
+      const gId = String(r.googleId || '').trim();
+      if (!gId) {
+        skippedNoGoogleId.push({ row: r.row, googleId: r.googleId });
+        return;
+      }
+      if (excludedGoogleIds.has(gId)) {
+        skippedExcluded.push(r.googleId);
+        return;
+      }
+      if (isAlreadySynced(eventId, gId)) {
+        skippedSynced.push(gId);
+        return;
+      }
+      resultsToApply.push(r);
+    });
+
+    if (resultsToApply.length === 0) {
+      return res({
+        status: 'success',
+        message: 'Tidak ada data baru untuk di-apply',
+        skippedSynced: skippedSynced,
+        skippedNoGoogleId: skippedNoGoogleId,
+        skippedExcluded: skippedExcluded,
+        warnings: sheetReadResult.warnings
+      });
+    }
+
+    const rowMap = {};
+    boardRows.forEach((row, index) => {
+      const gId = String(row[idCol] || '').trim();
+      if (gId) {
+        rowMap[gId] = {
+          rowIndex: index,
+          point: Number(row[pointCol]) || 0,
+          pointFinish: Number(row[pointFinishCol]) || 0,
+          previousRank: prevRankCol !== undefined ? (String(row[prevRankCol] || '').trim() ? Number(row[prevRankCol]) : null) : null
+        };
+      }
+    });
+
+    const updates = [];
+    const newRows = [];
+
+    resultsToApply.forEach(r => {
+      const gId = String(r.googleId || '').trim();
+      if (!gId) return;
+
+      const addedPoint = Number(r.point) || 0;
+      const addedPointFinish = Number(r.pointFinish) || 0;
+
+      if (rowMap[gId]) {
+        rowMap[gId].point += addedPoint;
+        rowMap[gId].pointFinish += addedPointFinish;
+      } else {
+        rowMap[gId] = {
+          rowIndex: -1,
+          point: addedPoint,
+          pointFinish: addedPointFinish,
+          previousRank: null
+        };
+      }
+    });
+
+    const sortedEntries = Object.keys(rowMap).map(gId => ({
+      googleId: gId,
+      ...rowMap[gId]
+    }));
+
+    sortedEntries.sort((a, b) => {
+      if (b.point !== a.point) return b.point - a.point;
+      if (b.pointFinish !== a.pointFinish) return b.pointFinish - a.pointFinish;
+      return a.googleId.localeCompare(b.googleId);
+    });
+
+    sortedEntries.forEach((entry, index) => {
+      const currentRank = index + 1;
+      const prevRank = entry.previousRank;
+      let status = 'stay';
+      if (prevRank === null || prevRank === undefined || String(prevRank) === '') {
+        status = 'new';
+      } else if (prevRank > currentRank) {
+        status = 'up';
+      } else if (prevRank < currentRank) {
+        status = 'down';
+      }
+
+      updates.push({
+        googleId: entry.googleId,
+        rank: currentRank,
+        previousRank: prevRank,
+        status: status,
+        point: entry.point,
+        pointFinish: entry.pointFinish,
+        addedPoint: entry.addedPoint || 0,
+        addedPointFinish: entry.addedPointFinish || 0
+      });
+    });
+
+    updates.forEach(update => {
+      if (rowMap[update.googleId] && rowMap[update.googleId].rowIndex >= 0) {
+        const sheetRow = rowMap[update.googleId].rowIndex + 2;
+        if (pointCol !== undefined) {
+          boardSheet.getRange(sheetRow, pointCol + 1).setValue(update.point);
+        }
+        if (pointFinishCol !== undefined) {
+          boardSheet.getRange(sheetRow, pointFinishCol + 1).setValue(update.pointFinish);
+        }
+        if (statusCol !== undefined) {
+          boardSheet.getRange(sheetRow, statusCol + 1).setValue(update.status);
+        }
+      } else {
+        newRows.push([
+          update.googleId,
+          update.rank,
+          update.status,
+          update.point,
+          update.pointFinish,
+          ''
+        ]);
+      }
+    });
+
+    if (newRows.length > 0) {
+      const startRow = boardSheet.getLastRow() + 1;
+      boardSheet.getRange(startRow, 1, newRows.length, newRows[0].length).setValues(newRows);
+    }
+
+    resultsToApply.forEach(r => {
+      recordSync(eventId, r.googleId, r.point, r.pointFinish);
+    });
+
+    return res({
+      status: 'success',
+      message: 'Berhasil apply tournament results',
+      updates: updates,
+      newRows: newRows.length,
+      skippedSynced: skippedSynced,
+      skippedNoGoogleId: skippedNoGoogleId,
+      skippedExcluded: skippedExcluded,
+      warnings: sheetReadResult.warnings
+    });
+  } catch (err) {
+    console.error('applyTournamentResultsToLeaderboard error: ' + err.message);
+    return res({ status: 'error', message: 'Gagal apply tournament results: ' + err.message });
   }
 }
 
@@ -238,6 +3545,8 @@ function createProfile(data) {
     return res({ status: "error", message: "Nickname sudah diambil!" });
   }
 
+  const publicProfileId = generateShortId();
+
   sheet.appendRow([
     data.googleId,
     data.email,
@@ -248,16 +3557,55 @@ function createProfile(data) {
     new Date(), // Join Date
     new Date(), // Last Updated
     "",          // slogan
-    ""           // catatan
+    "",          // catatan
+    publicProfileId
   ]);
-  return res({ status: "success" });
+  return res({ status: "success", public_profile_id: publicProfileId });
 }
 
 function postAttendance(data) {
+  const eventId = String(data.eventId || '').trim();
+  if (!eventId) return res({ status: 'error', message: 'eventId wajib diisi' });
+
+  const eventSheet = SS.getSheetByName("Events");
+  if (!eventSheet) return res({ status: 'error', message: 'Sheet Events tidak ditemukan' });
+
+  const eventValues = eventSheet.getDataRange().getDisplayValues();
+  const eventHeaders = eventValues[0];
+  const eventRows = eventValues.slice(1);
+  const eventMap = {};
+  eventHeaders.forEach((h, i) => {
+    eventMap[String(h).toLowerCase().trim()] = i;
+  });
+
+  const eventIdCol = eventMap['event_id'] !== undefined ? eventMap['event_id'] : eventMap['id'];
+  const statusCol = eventMap['status'];
+  const tournamentStatusCol = eventMap['tournament_status'];
+
+  const targetEvent = eventRows.find(r =>
+    String(r[eventIdCol] || '').trim() === eventId
+  );
+
+  if (!targetEvent) {
+    return res({ status: 'error', message: 'Event tidak ditemukan' });
+  }
+
+  const eventStatus = String(targetEvent[statusCol] || '').toLowerCase().trim();
+  if (eventStatus !== 'aktif') {
+    return res({ status: 'error', message: 'Absensi hanya bisa dilakukan saat event sedang aktif.' });
+  }
+
+  const tournamentStatus = tournamentStatusCol !== undefined
+    ? String(targetEvent[tournamentStatusCol] || '').toLowerCase().trim()
+    : 'not_started';
+
+  if (tournamentStatus === 'running' || tournamentStatus === 'finished') {
+    return res({ status: 'error', message: 'Check-in sudah ditutup karena tournament sudah dimulai.' });
+  }
+
   const sheet = SS.getSheetByName("Attendance");
   const values = sheet.getDataRange().getValues();
 
-  // Validasi Duplikat: GoogleID + EventID
   const isDuplicate = values.some(row => row[1] == data.eventId && row[2] == data.googleId);
 
   if (isDuplicate) {
@@ -268,7 +3616,7 @@ function postAttendance(data) {
     new Date(),
     data.eventId,
     data.googleId,
-    data.nickname, // Menggunakan Nickname dari profile
+    data.nickname,
     data.email,
     data.foto
   ]);
@@ -305,38 +3653,407 @@ function updateNickname(data) {
 
 function createEvent(data) {
   const sheet = SS.getSheetByName("Events");
-  const rows = sheet.getDataRange().getValues();
+  if (!sheet) return res({ status: "error", message: "Sheet Events tidak ditemukan" });
 
-  // 1. Ubah semua event lama menjadi "selesai"
-  for (let i = 1; i < rows.length; i++) {
-    sheet.getRange(i + 1, 5).setValue("selesai");
+  const rows = sheet.getDataRange().getValues();
+  const headers = rows[0];
+  const statusIdx = headers.findIndex(h => String(h).toLowerCase().trim() === 'status');
+
+  const ruleId = String(data.rule_id || '').trim();
+  if (ruleId) {
+    const rulesSheet = SS.getSheetByName("Rules");
+    if (rulesSheet) {
+      const ruleRows = rulesSheet.getDataRange().getValues();
+      if (ruleRows.length >= 2) {
+        const ruleHeaders = ruleRows[0];
+        const ruleDataRows = ruleRows.slice(1);
+        const ruleMap = {};
+        ruleHeaders.forEach((h, i) => {
+          ruleMap[String(h).toLowerCase().trim()] = i;
+        });
+        const ruleExists = ruleDataRows.some(row => String(row[ruleMap['rule_id']] || '').toLowerCase() === ruleId.toLowerCase());
+        if (!ruleExists) {
+          return res({ status: 'error', message: 'Rule ID "' + ruleId + '" tidak ditemukan di sheet Rules' });
+        }
+      }
+    }
   }
 
-  // 2. Tambah event baru dengan status "aktif"
-  // Struktur 10 kolom: id | nama | tanggal | lokasi | status | challonge_id | challonge_url | challonge_state | created_at | waktu
-  const newId = "E" + (rows.length);
-  sheet.appendRow([newId, data.nama, new Date(), data.lokasi, "aktif", "", "", "", "", data.waktu || "20.00 WIB"]);
+  // 1. Akhiri semua event aktif menggunakan endEvent logic
+  if (statusIdx >= 0) {
+    const eventValues = sheet.getDataRange().getDisplayValues();
+    const eventHeaders = eventValues[0];
+    const eventRows = eventValues.slice(1);
+    const eventMap = {};
+    eventHeaders.forEach((h, i) => {
+      eventMap[String(h).toLowerCase().trim()] = i;
+    });
+    const eventIdCol = eventMap['event_id'] !== undefined ? eventMap['event_id'] : eventMap['id'];
+    const eventStatusCol = eventMap['status'];
 
-  return res({ status: "success", message: "Event berhasil dibuat!" });
+    for (let i = 0; i < eventRows.length; i++) {
+      const rowEventId = String(eventRows[i][eventIdCol] || '').trim();
+      const rowStatus = String(eventRows[i][eventStatusCol] || '').toLowerCase().trim();
+      if (rowStatus === 'aktif') {
+        updateEventStatus(rowEventId, 'selesai');
+      }
+    }
+  }
+
+  // 2. Generate event ID
+  const newId = generateEventId();
+
+  // 3. Tentukan tanggal_event dan waktu_event
+  let tanggal_event = String(data.tanggal_event || '').trim();
+  let waktu_event = String(data.waktu_event || '').trim();
+
+  if (!tanggal_event || !waktu_event) {
+    const waktu = data.waktu || "20:00 WIB";
+    const parsed = parseWaktuString(waktu);
+    if (!tanggal_event) tanggal_event = parsed.tanggal_event || '';
+    if (!waktu_event) waktu_event = parsed.waktu_event || waktu;
+  }
+
+  // 4. Tambah event baru dengan 12 kolom
+  sheet.appendRow([
+    newId,
+    data.nama || '',
+    new Date(),
+    data.lokasi || '',
+     "upcoming",
+    "",
+    "",
+    "",
+    "",
+    tanggal_event,
+    waktu_event,
+    ruleId,
+    "not_started"
+  ]);
+
+  return res({ status: "success", message: "Event berhasil dibuat!", event_id: newId });
+}
+
+function updateEventStatus(eventId, targetStatus) {
+  const sheet = SS.getSheetByName("Events");
+  if (!sheet) return { status: 'error', message: 'Sheet Events tidak ditemukan' };
+
+  const values = sheet.getDataRange().getDisplayValues();
+  const headers = values[0];
+  const rows = values.slice(1);
+
+  if (rows.length === 0) {
+    return { status: 'error', message: 'Tidak ada event' };
+  }
+
+  const map = getHeaderMap(sheet);
+  const eventIdCol = map['event_id'] !== undefined ? map['event_id'] : map['id'];
+  const statusCol = map['status'];
+
+  if (eventIdCol === undefined || statusCol === undefined) {
+    return { status: 'error', message: 'Header event_id/status tidak ditemukan di Events' };
+  }
+
+  const targetRowIndex = rows.findIndex(r =>
+    String(r[eventIdCol] || '').trim() === String(eventId || '').trim()
+  );
+
+  if (targetRowIndex === -1) {
+    return { status: 'error', message: 'Event tidak ditemukan' };
+  }
+
+  const currentStatus = String(rows[targetRowIndex][statusCol] || '').toLowerCase().trim();
+  const normalizedTarget = String(targetStatus || '').toLowerCase().trim();
+
+  const allowedTransitions = {
+    'upcoming': ['aktif'],
+    'aktif': ['selesai'],
+    'selesai': []
+  };
+
+  if (currentStatus === normalizedTarget) {
+    if (normalizedTarget === 'aktif') {
+      return { status: 'error', message: 'Event sudah aktif.', code: 'already_active' };
+    } else if (normalizedTarget === 'selesai') {
+      return { status: 'error', message: 'Event sudah selesai.', code: 'already_ended' };
+    } else if (normalizedTarget === 'upcoming') {
+      return { status: 'error', message: 'Event sudah dalam status upcoming.', code: 'already_upcoming' };
+    }
+  }
+
+  const allowed = allowedTransitions[currentStatus] || [];
+  if (!allowed.includes(normalizedTarget)) {
+    if (currentStatus === 'aktif' && normalizedTarget === 'upcoming') {
+      return { status: 'error', message: 'Event sudah aktif dan tidak dapat diubah menjadi upcoming.', code: 'transition_not_allowed' };
+    }
+    if (currentStatus === 'selesai' && normalizedTarget === 'aktif') {
+      return { status: 'error', message: 'Event sudah selesai dan tidak dapat diaktifkan kembali.', code: 'transition_not_allowed' };
+    }
+    if (currentStatus === 'selesai' && normalizedTarget === 'upcoming') {
+      return { status: 'error', message: 'Event sudah selesai dan tidak dapat diubah menjadi upcoming.', code: 'transition_not_allowed' };
+    }
+    if (currentStatus === 'upcoming' && normalizedTarget === 'selesai') {
+      return { status: 'error', message: 'Event belum dimulai.', code: 'transition_not_allowed' };
+    }
+    return { status: 'error', message: 'Transisi status tidak diizinkan: ' + currentStatus + ' → ' + normalizedTarget, code: 'transition_not_allowed' };
+  }
+
+  sheet.getRange(targetRowIndex + 2, statusCol + 1).setValue(normalizedTarget);
+
+  return { status: 'success', data: { event_id: eventId, new_status: normalizedTarget } };
+}
+
+function startEvent(data) {
+  const eventId = String(data.eventId || '').trim();
+  Logger.log('[START EVENT] eventId=' + eventId);
+  if (!eventId) return res({ status: 'error', message: 'eventId wajib diisi' });
+
+  const result = updateEventStatus(eventId, 'aktif');
+  if (result.status === 'success') {
+    return res({ status: 'success', message: 'Event berhasil dimulai!', event_id: eventId });
+  }
+  return res(result);
+}
+
+function endEvent(data) {
+  const eventId = String(data.eventId || '').trim();
+  if (!eventId) return res({ status: 'error', message: 'eventId wajib diisi' });
+
+  const result = updateEventStatus(eventId, 'selesai');
+  if (result.status === 'success') {
+    return res({ status: 'success', message: 'Event berhasil diakhiri!', event_id: eventId });
+  }
+  return res(result);
+}
+
+function startTournamentStatus(data) {
+  const eventId = String(data.eventId || '').trim();
+  if (!eventId) return res({ status: 'error', message: 'eventId wajib diisi' });
+
+  const sheet = SS.getSheetByName("Events");
+  if (!sheet) return res({ status: 'error', message: 'Sheet Events tidak ditemukan' });
+
+  const values = sheet.getDataRange().getDisplayValues();
+  const headers = values[0];
+  const rows = values.slice(1);
+
+  if (rows.length === 0) {
+    return res({ status: 'error', message: 'Tidak ada event' });
+  }
+
+  const map = getHeaderMap(sheet);
+  const eventIdCol = map['event_id'] !== undefined ? map['event_id'] : map['id'];
+  const tournamentStatusCol = map['tournament_status'];
+
+  if (eventIdCol === undefined) {
+    return res({ status: 'error', message: 'Header event_id tidak ditemukan di Events' });
+  }
+
+  const targetRowIndex = rows.findIndex(r =>
+    String(r[eventIdCol] || '').trim() === eventId
+  );
+
+  if (targetRowIndex === -1) {
+    return res({ status: 'error', message: 'Event tidak ditemukan' });
+  }
+
+  const currentTournamentStatus = tournamentStatusCol !== undefined
+    ? String(rows[targetRowIndex][tournamentStatusCol] || '').toLowerCase().trim()
+    : 'not_started';
+
+  if (currentTournamentStatus === 'running') {
+    return res({ status: 'error', message: 'Tournament sudah berjalan.', code: 'already_running' });
+  }
+
+  if (currentTournamentStatus === 'finished') {
+    return res({ status: 'error', message: 'Tournament sudah selesai.', code: 'already_finished' });
+  }
+
+  if (tournamentStatusCol !== undefined) {
+    sheet.getRange(targetRowIndex + 2, tournamentStatusCol + 1).setValue('running');
+  }
+
+  return res({ status: 'success', message: 'Tournament berhasil dimulai!', event_id: eventId, tournament_status: 'running' });
+}
+
+function finishTournamentStatus(data) {
+  const eventId = String(data.eventId || '').trim();
+  if (!eventId) return res({ status: 'error', message: 'eventId wajib diisi' });
+
+  const sheet = SS.getSheetByName("Events");
+  if (!sheet) return res({ status: 'error', message: 'Sheet Events tidak ditemukan' });
+
+  const values = sheet.getDataRange().getDisplayValues();
+  const headers = values[0];
+  const rows = values.slice(1);
+
+  if (rows.length === 0) {
+    return res({ status: 'error', message: 'Tidak ada event' });
+  }
+
+  const map = getHeaderMap(sheet);
+  const eventIdCol = map['event_id'] !== undefined ? map['event_id'] : map['id'];
+  const tournamentStatusCol = map['tournament_status'];
+
+  if (eventIdCol === undefined) {
+    return res({ status: 'error', message: 'Header event_id tidak ditemukan di Events' });
+  }
+
+  const targetRowIndex = rows.findIndex(r =>
+    String(r[eventIdCol] || '').trim() === eventId
+  );
+
+  if (targetRowIndex === -1) {
+    return res({ status: 'error', message: 'Event tidak ditemukan' });
+  }
+
+  const currentTournamentStatus = tournamentStatusCol !== undefined
+    ? String(rows[targetRowIndex][tournamentStatusCol] || '').toLowerCase().trim()
+    : 'not_started';
+
+  if (currentTournamentStatus === 'finished') {
+    return res({ status: 'error', message: 'Tournament sudah selesai.', code: 'already_finished' });
+  }
+
+  if (currentTournamentStatus !== 'running') {
+    return res({ status: 'error', message: 'Tournament belum dimulai. Tidak dapat diselesaikan.', code: 'not_running' });
+  }
+
+  if (tournamentStatusCol !== undefined) {
+    sheet.getRange(targetRowIndex + 2, tournamentStatusCol + 1).setValue('finished');
+  }
+
+  return res({ status: 'success', message: 'Tournament berhasil diselesaikan!', event_id: eventId, tournament_status: 'finished' });
+}
+
+function updateEvent(data) {
+  const eventId = String(data.eventId || '').trim();
+  if (!eventId) return res({ status: 'error', message: 'eventId wajib diisi' });
+
+  const sheet = SS.getSheetByName("Events");
+  if (!sheet) return res({ status: 'error', message: 'Sheet Events tidak ditemukan' });
+
+  const values = sheet.getDataRange().getDisplayValues();
+  const headers = values[0];
+  const rows = values.slice(1);
+
+  if (rows.length === 0) {
+    return res({ status: 'error', message: 'Tidak ada event' });
+  }
+
+  const map = getHeaderMap(sheet);
+  const eventIdCol = map['event_id'] !== undefined ? map['event_id'] : map['id'];
+
+  if (eventIdCol === undefined) {
+    return res({ status: 'error', message: 'Header event_id tidak ditemukan di Events' });
+  }
+
+  const targetRowIndex = rows.findIndex(r =>
+    String(r[eventIdCol] || '').trim() === String(eventId || '').trim()
+  );
+
+  if (targetRowIndex === -1) {
+    return res({ status: 'error', message: 'Event tidak ditemukan' });
+  }
+
+  const updatableFields = ['nama', 'lokasi', 'tanggal_event', 'waktu_event'];
+  const updatedFields = [];
+
+  updatableFields.forEach(field => {
+    if (data[field] !== undefined && data[field] !== null) {
+      const colIndex = map[field];
+      if (colIndex !== undefined) {
+        const newValue = String(data[field] || '').trim();
+        sheet.getRange(targetRowIndex + 2, colIndex + 1).setValue(newValue);
+        updatedFields.push(field);
+      }
+    }
+  });
+
+  if (data.rule_id !== undefined && data.rule_id !== null && String(data.rule_id || '').trim() !== '') {
+    const ruleId = String(data.rule_id).trim();
+    const rulesSheet = SS.getSheetByName("Rules");
+    if (rulesSheet) {
+      const ruleRows = rulesSheet.getDataRange().getValues();
+      if (ruleRows.length >= 2) {
+        const ruleHeaders = ruleRows[0];
+        const ruleDataRows = ruleRows.slice(1);
+        const ruleMap = {};
+        ruleHeaders.forEach((h, i) => {
+          ruleMap[String(h).toLowerCase().trim()] = i;
+        });
+        const ruleExists = ruleDataRows.some(row => String(row[ruleMap['rule_id']] || '').toLowerCase() === ruleId.toLowerCase());
+        if (!ruleExists) {
+          return res({ status: 'error', message: 'Rule ID "' + ruleId + '" tidak ditemukan di sheet Rules' });
+        }
+      }
+    }
+    const colIndex = map['rule_id'];
+    if (colIndex !== undefined) {
+      sheet.getRange(targetRowIndex + 2, colIndex + 1).setValue(ruleId);
+      updatedFields.push('rule_id');
+    }
+  }
+
+  if (updatedFields.length === 0) {
+    return res({ status: 'error', message: 'Tidak ada field yang diupdate' });
+  }
+
+  return res({
+    status: 'success',
+    message: 'Event berhasil diperbarui',
+    event_id: eventId,
+    updated_fields: updatedFields
+  });
 }
 
 function resetArena() {
   const sheet = SS.getSheetByName("Events");
-  const rows = sheet.getDataRange().getValues();
+  if (!sheet) return res({ status: "error", message: "Sheet Events tidak ditemukan" });
 
-  // Ubah semua event yang "aktif" menjadi "selesai"
-  for (let i = 1; i < rows.length; i++) {
-    sheet.getRange(i + 1, 5).setValue("selesai");
-    // Clear challonge_url (kolom G = index 6) dan challonge_id (index 5) jika ada
-    if (rows[i].length > 5) {
-      sheet.getRange(i + 1, 6).setValue("");
-    }
-    if (rows[i].length > 6) {
-      sheet.getRange(i + 1, 7).setValue("");
+  const values = sheet.getDataRange().getDisplayValues();
+  const headers = values[0];
+  const rows = values.slice(1);
+
+  if (rows.length === 0) {
+    return res({ status: "success", message: "Arena berhasil dikosongkan!" });
+  }
+
+  const map = getHeaderMap(sheet);
+  const eventIdCol = map['event_id'] !== undefined ? map['event_id'] : map['id'];
+  const statusCol = map['status'];
+
+  if (eventIdCol === undefined || statusCol === undefined) {
+    return res({ status: "error", message: "Header event_id/status tidak ditemukan di Events" });
+  }
+
+  let endedCount = 0;
+  let errors = [];
+
+  for (let i = 0; i < rows.length; i++) {
+    const rowEventId = String(rows[i][eventIdCol] || '').trim();
+    const rowStatus = String(rows[i][statusCol] || '').toLowerCase().trim();
+
+    if (rowStatus === 'aktif') {
+      const result = updateEventStatus(rowEventId, 'selesai');
+      if (result.status === 'success') {
+        endedCount++;
+      } else {
+        errors.push(rowEventId + ': ' + result.message);
+      }
     }
   }
 
-  return res({ status: "success", message: "Arena berhasil dikosongkan!" });
+  if (errors.length > 0) {
+    return res({
+      status: 'error',
+      message: 'Beberapa event gagal diakhiri: ' + errors.join('; '),
+      ended_count: endedCount,
+      errors: errors
+    });
+  }
+
+  return res({ status: "success", message: "Arena berhasil dikosongkan!", ended_count: endedCount });
 }
 
 function getSettings() {
@@ -509,6 +4226,41 @@ function toggleNicknameSetting() {
 // ADMIN: GET/SET RULE OF THE MONTH
 // ============================================
 function getRule() {
+  const rulesSheet = SS.getSheetByName("Rules");
+  if (rulesSheet) {
+    const rows = rulesSheet.getDataRange().getValues();
+    if (rows.length >= 2) {
+      const headers = rows[0];
+      const dataRows = rows.slice(1);
+      const map = {};
+      headers.forEach((h, i) => {
+        map[String(h).toLowerCase().trim()] = i;
+      });
+
+      const activeRule = dataRows.find(row => String(row[map['status']] || '').toLowerCase().trim() === 'aktif');
+      if (activeRule) {
+        const rule_id = String(activeRule[map['rule_id']] || '');
+        const nama = String(activeRule[map['nama']] || '');
+        const periode = String(activeRule[map['periode']] || '');
+        const title = String(activeRule[map['title']] || '');
+        const image_url = String(activeRule[map['image_url']] || '');
+        const warning = String(activeRule[map['warning']] || '');
+        const details = String(activeRule[map['details']] || '');
+
+        return res({
+          rule_id: rule_id,
+          rule_nama: nama,
+          rule_periode: periode,
+          rule_title: title,
+          rule_image_url: image_url,
+          rule_warning: warning,
+          rule_details: details,
+          rule_status: 'aktif'
+        });
+      }
+    }
+  }
+
   const sheet = SS.getSheetByName("Settings");
   if (!sheet) return res({});
   const rows = sheet.getDataRange().getValues();
@@ -526,22 +4278,212 @@ function getRule() {
 }
 
 function saveRule(data) {
-  const sheet = SS.getSheetByName("Settings");
-  if (!sheet) return res({ status: "error", message: "Sheet Settings tidak ditemukan" });
+  const rulesSheet = initRulesSheet();
+  if (!rulesSheet) return res({ status: "error", message: "Sheet Rules tidak ditemukan" });
 
-  const keys = ['rule_title', 'rule_image_url', 'rule_warning', 'rule_details'];
-  const values = sheet.getDataRange().getValues();
+  const headers = rulesSheet.getDataRange().getValues()[0] || [];
+  const map = {};
+  headers.forEach((h, i) => {
+    map[String(h).toLowerCase().trim()] = i;
+  });
 
-  keys.forEach(key => {
-    const idx = values.findIndex(r => String(r[0]).toLowerCase() === key);
-    if (idx !== -1) {
-      sheet.getRange(idx + 1, 2).setValue(data[key] || '');
-    } else {
-      sheet.appendRow([key, data[key] || '']);
+  const requiredCols = ['rule_id', 'nama', 'periode', 'title', 'image_url', 'warning', 'details', 'status'];
+  const missing = requiredCols.filter(c => map[c] === undefined);
+  if (missing.length > 0) {
+    return res({ status: 'error', message: 'Header Rules tidak lengkap: ' + missing.join(', ') });
+  }
+
+  const ruleId = String(data.rule_id || '').trim();
+  const nama = String(data.nama || 'Rule of the Month').trim();
+  const periode = String(data.periode || Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM')).trim();
+  const title = String(data.title || data.rule_title || '').trim();
+  const image_url = String(data.image_url || data.rule_image_url || '').trim();
+  const warning = String(data.warning || data.rule_warning || '').trim();
+  const details = String(data.details || data.rule_details || '').trim();
+  const status = String(data.status || 'aktif').toLowerCase().trim();
+
+  const validStatuses = ['aktif', 'arsip', 'draft'];
+  if (!validStatuses.includes(status)) {
+    return res({ status: 'error', message: 'Status tidak valid. Gunakan: aktif, arsip, draft' });
+  }
+
+  const existingRows = rulesSheet.getDataRange().getValues();
+  const dataRows = existingRows.slice(1);
+
+  if (ruleId) {
+    const rowIndex = dataRows.findIndex(row => String(row[map['rule_id']] || '').toLowerCase() === ruleId.toLowerCase());
+    if (rowIndex >= 0) {
+      const sheetRow = rowIndex + 2;
+      rulesSheet.getRange(sheetRow, map['nama'] + 1).setValue(nama);
+      rulesSheet.getRange(sheetRow, map['periode'] + 1).setValue(periode);
+      rulesSheet.getRange(sheetRow, map['title'] + 1).setValue(title);
+      rulesSheet.getRange(sheetRow, map['image_url'] + 1).setValue(image_url);
+      rulesSheet.getRange(sheetRow, map['warning'] + 1).setValue(warning);
+      rulesSheet.getRange(sheetRow, map['details'] + 1).setValue(details);
+      rulesSheet.getRange(sheetRow, map['status'] + 1).setValue(status);
+      return res({ status: 'success', message: 'Rule berhasil diperbarui', rule_id: ruleId });
+    }
+  }
+
+  let newRuleId = ruleId;
+  if (!newRuleId) {
+    let maxNum = 0;
+    dataRows.forEach(row => {
+      const id = String(row[map['rule_id']] || '');
+      const match = id.match(/^R(\d+)$/i);
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (num > maxNum) maxNum = num;
+      }
+    });
+    newRuleId = 'R' + String(maxNum + 1).padStart(3, '0');
+  }
+
+  rulesSheet.appendRow([newRuleId, nama, periode, title, image_url, warning, details, status]);
+  return res({ status: 'success', message: 'Rule berhasil dibuat', rule_id: newRuleId });
+}
+
+// ============================================
+// RULES SHEET
+// ============================================
+
+function initRulesSheet() {
+  const sheet = SS.getSheetByName("Rules");
+  if (!sheet) {
+    const newSheet = SS.insertSheet("Rules");
+    newSheet.appendRow(['rule_id', 'nama', 'periode', 'title', 'image_url', 'warning', 'details', 'status']);
+    return newSheet;
+  }
+  return sheet;
+}
+
+function migrateRulesFromSettings() {
+  const settingsSheet = SS.getSheetByName("Settings");
+  const rulesSheet = initRulesSheet();
+
+  if (!settingsSheet || !rulesSheet) {
+    return res({ status: 'error', message: 'Sheet Settings atau Rules tidak ditemukan' });
+  }
+
+  const settingsRows = settingsSheet.getDataRange().getValues();
+  const ruleKeys = ['rule_title', 'rule_image_url', 'rule_warning', 'rule_details'];
+  const ruleData = {};
+
+  settingsRows.forEach(r => {
+    const key = String(r[0] || '').toLowerCase();
+    if (ruleKeys.includes(key)) {
+      ruleData[key] = String(r[1] || '');
     }
   });
 
-  return res({ status: "success", message: "Rule berhasil disimpan" });
+  if (!ruleData.rule_title && !ruleData.rule_details) {
+    return res({ status: 'success', message: 'Tidak ada rule untuk dimigrasi' });
+  }
+
+  const existingRules = rulesSheet.getDataRange().getValues();
+  let nextId = 1;
+  for (let i = 1; i < existingRules.length; i++) {
+    const id = String(existingRules[i][0] || '');
+    const match = id.match(/^R(\d+)$/i);
+    if (match) {
+      const num = parseInt(match[1], 10);
+      if (num >= nextId) nextId = num + 1;
+    }
+  }
+
+  const ruleId = 'R' + String(nextId).padStart(3, '0');
+  const now = new Date();
+  const periode = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM');
+
+  rulesSheet.appendRow([
+    ruleId,
+    'Rule of the Month',
+    periode,
+    ruleData.rule_title || '',
+    ruleData.rule_image_url || '',
+    ruleData.rule_warning || '',
+    ruleData.rule_details || '',
+    'aktif'
+  ]);
+
+  return res({
+    status: 'success',
+    message: 'Rule migrated to ' + ruleId,
+    rule_id: ruleId
+  });
+}
+
+function getRules() {
+  const sheet = SS.getSheetByName("Rules");
+  if (!sheet) return res([]);
+
+  const rows = sheet.getDataRange().getValues();
+  if (rows.length < 2) return res([]);
+
+  const headers = rows[0];
+  const dataRows = rows.slice(1);
+
+  const map = {};
+  headers.forEach((h, i) => {
+    map[String(h).toLowerCase().trim()] = i;
+  });
+
+  const result = [];
+  dataRows.forEach(row => {
+    const rule_id = String(row[map['rule_id']] || '');
+    if (!rule_id) return;
+    result.push({
+      rule_id: rule_id,
+      nama: String(row[map['nama']] || ''),
+      periode: String(row[map['periode']] || ''),
+      title: String(row[map['title']] || ''),
+      image_url: String(row[map['image_url']] || ''),
+      warning: String(row[map['warning']] || ''),
+      details: String(row[map['details']] || ''),
+      status: String(row[map['status']] || '').toLowerCase().trim()
+    });
+  });
+
+  const statusOrder = { 'aktif': 0, 'draft': 1, 'arsip': 2 };
+  result.sort((a, b) => {
+    const orderA = statusOrder[a.status] ?? 99;
+    const orderB = statusOrder[b.status] ?? 99;
+    if (orderA !== orderB) return orderA - orderB;
+    return a.rule_id.localeCompare(b.rule_id);
+  });
+
+  return res(result);
+}
+
+function getRuleById(ruleId) {
+  const sheet = SS.getSheetByName("Rules");
+  if (!sheet) return res({ status: 'error', message: 'Sheet Rules tidak ditemukan' });
+
+  const rows = sheet.getDataRange().getValues();
+  if (rows.length < 2) return res({ status: 'error', message: 'Rule tidak ditemukan' });
+
+  const headers = rows[0];
+  const dataRows = rows.slice(1);
+
+  const map = {};
+  headers.forEach((h, i) => {
+    map[String(h).toLowerCase().trim()] = i;
+  });
+
+  const target = dataRows.find(row => String(row[map['rule_id']] || '').toLowerCase() === String(ruleId || '').toLowerCase());
+
+  if (!target) return res({ status: 'error', message: 'Rule tidak ditemukan' });
+
+  return res({
+    rule_id: String(target[map['rule_id']] || ''),
+    nama: String(target[map['nama']] || ''),
+    periode: String(target[map['periode']] || ''),
+    title: String(target[map['title']] || ''),
+    image_url: String(target[map['image_url']] || ''),
+    warning: String(target[map['warning']] || ''),
+    details: String(target[map['details']] || ''),
+    status: String(target[map['status']] || '').toLowerCase().trim()
+  });
 }
 
 // ============================================
@@ -698,6 +4640,12 @@ function generateTournament(payload) {
       return res({ status: 'error', message: 'Event tidak aktif' });
     }
 
+    Logger.log('[CHALLONGE CONSISTENCY] eventId=' + eventId + 
+      ' challonge_id=' + (eventData.event.challonge_id || '') + 
+      ' challonge_url=' + (eventData.event.challonge_url || '') + 
+      ' challonge_state=' + (eventData.event.challonge_state || '') + 
+      ' tournament_status=' + (eventData.event.tournament_status || ''));
+
     if (eventData.event.challongeUrl && String(eventData.event.challongeUrl).trim() !== '') {
       return res({ status: 'success', challongeUrl: eventData.event.challongeUrl, alreadyGenerated: true });
     }
@@ -749,6 +4697,7 @@ function generateTournament(payload) {
     const challongeUrl = 'https://challonge.com/' + createRes.data.attributes.url;
 
     const validParticipants = eventData.participants.filter(p => p && p.nama && String(p.nama).trim() !== '');
+    const mappingPromises = [];
     for (const participant of validParticipants) {
       const pRes = challongeFetch('post', '/tournaments/' + tournamentId + '/participants.json', {
         data: { type: 'participant', attributes: { name: String(participant.nama).trim() } }
@@ -757,7 +4706,17 @@ function generateTournament(payload) {
         console.error('Gagal tambah peserta ' + participant.nama + ' (HTTP ' + pRes.code + '): ' + pRes.text);
       } else if (pRes.errors) {
         console.error('Gagal tambah peserta ' + participant.nama + ': ' + JSON.stringify(pRes.errors));
+      } else if (pRes.data && pRes.data.id) {
+        mappingPromises.push({
+          challongeParticipantId: String(pRes.data.id),
+          googleId: String(participant.googleId || '').trim(),
+          nickname: String(participant.nama || '').trim()
+        });
       }
+    }
+
+    if (mappingPromises.length > 0) {
+      saveTournamentParticipantMapping(eventId, tournamentId, mappingPromises);
     }
 
     const startRes = challongeFetch('put', '/tournaments/' + tournamentId + '/change_state.json', {
@@ -775,25 +4734,45 @@ function generateTournament(payload) {
     const eventHeaders = eventValues[0];
     const eventRows = eventValues.slice(1);
 
-    const challongeCol = eventHeaders.findIndex(h => String(h).toLowerCase() === 'challongeurl');
-    const idCol = eventHeaders.findIndex(h => String(h).toLowerCase() === 'challongeid');
-    const eventIdCol = eventHeaders.findIndex(h => String(h).toLowerCase() === 'id');
+    const headerMap = {};
+    eventHeaders.forEach((h, i) => {
+      headerMap[String(h).toLowerCase().trim()] = i;
+    });
 
-    if (challongeCol >= 0 && eventIdCol >= 0) {
+    const challongeCol = headerMap['challonge_url'] !== undefined ? headerMap['challonge_url'] : (headerMap['challongeurl'] !== undefined ? headerMap['challongeurl'] : -1);
+    const idCol = headerMap['challonge_id'] !== undefined ? headerMap['challonge_id'] : (headerMap['challongeid'] !== undefined ? headerMap['challongeid'] : -1);
+    const eventIdCol = headerMap['event_id'] !== undefined ? headerMap['event_id'] : (headerMap['id'] !== undefined ? headerMap['id'] : -1);
+    const stateCol = headerMap['challonge_state'] !== undefined ? headerMap['challonge_state'] : (headerMap['challongestate'] !== undefined ? headerMap['challongestate'] : -1);
+    const createdCol = headerMap['created_at'] !== undefined ? headerMap['created_at'] : -1;
+
+    if (eventIdCol >= 0) {
       for (let i = 0; i < eventRows.length; i++) {
         if (String(eventRows[i][eventIdCol]) === eventId) {
-          eventSheet.getRange(i + 2, challongeCol + 1).setValue(challongeUrl);
-          if (idCol >= 0) {
-            eventSheet.getRange(i + 2, idCol + 1).setValue(tournamentId);
+          if (challongeCol >= 0) eventSheet.getRange(i + 2, challongeCol + 1).setValue(challongeUrl);
+          if (idCol >= 0) eventSheet.getRange(i + 2, idCol + 1).setValue(tournamentId);
+          if (stateCol >= 0) eventSheet.getRange(i + 2, stateCol + 1).setValue('pending');
+          if (createdCol >= 0) {
+            const now = new Date();
+            eventSheet.getRange(i + 2, createdCol + 1).setValue(now.toISOString());
           }
           break;
         }
       }
     } else {
+      const headerMap = {};
+      eventHeaders.forEach((h, i) => {
+        headerMap[String(h).toLowerCase().trim()] = i;
+      });
+      const fallbackIdCol = headerMap['event_id'] !== undefined ? headerMap['event_id'] : (headerMap['id'] !== undefined ? headerMap['id'] : 0);
+      const fallbackUrlCol = headerMap['challonge_url'] !== undefined ? headerMap['challonge_url'] : (headerMap['challongeurl'] !== undefined ? headerMap['challongeurl'] : 6);
+      const fallbackIdTournamentCol = headerMap['challonge_id'] !== undefined ? headerMap['challonge_id'] : (headerMap['challongeid'] !== undefined ? headerMap['challongeid'] : 5);
+      const fallbackStateCol = headerMap['challonge_state'] !== undefined ? headerMap['challonge_state'] : (headerMap['challongestate'] !== undefined ? headerMap['challongestate'] : 7);
+      
       for (let i = 0; i < eventRows.length; i++) {
-        if (String(eventRows[i][0]) === eventId) {
-          eventSheet.getRange(i + 2, 6).setValue(challongeUrl);
-          eventSheet.getRange(i + 2, 5).setValue(tournamentId);
+        if (String(eventRows[i][fallbackIdCol]) === eventId) {
+          eventSheet.getRange(i + 2, fallbackUrlCol + 1).setValue(challongeUrl);
+          eventSheet.getRange(i + 2, fallbackIdTournamentCol + 1).setValue(tournamentId);
+          eventSheet.getRange(i + 2, fallbackStateCol + 1).setValue('pending');
           break;
         }
       }
@@ -907,6 +4886,7 @@ function createTournament(data) {
 
     // 2. ADD PARTICIPANTS (v2.1, JSON:API)
     const validParticipants = eventData.participants.filter(p => p && p.nama && String(p.nama).trim() !== '');
+    const mappingPromises = [];
     for (const participant of validParticipants) {
       const pRes = challongeFetch('post', '/tournaments/' + tournamentId + '/participants.json', {
         data: { type: 'participant', attributes: { name: String(participant.nama).trim() } }
@@ -915,50 +4895,175 @@ function createTournament(data) {
         console.error('Gagal tambah peserta ' + participant.nama + ' (HTTP ' + pRes.code + '): ' + pRes.text);
       } else if (pRes.errors) {
         console.error('Gagal tambah peserta ' + participant.nama + ': ' + JSON.stringify(pRes.errors));
+      } else if (pRes.data && pRes.data.id) {
+        mappingPromises.push({
+          challongeParticipantId: String(pRes.data.id),
+          googleId: String(participant.googleId || '').trim(),
+          nickname: String(participant.nama || '').trim()
+        });
       }
     }
 
-    // 3. SIMPAN ke sheet Events — posisi kolom di-hardcode sesuai struktur sheet:
-    // id(0) nama(1) tanggal(2) lokasi(3) status(4) challonge_id(5) challonge_url(6) challonge_state(7) created_at(8)
+    if (mappingPromises.length > 0) {
+      saveTournamentParticipantMapping(eventId, tournamentId, mappingPromises);
+    }
+
+    // 3. RANDOMIZE + START TOURNAMENT + SET tournament_status = running
+    const randomizeRes = challongeFetch('post', '/tournaments/' + tournamentId + '/participants/randomize.json');
+    if (randomizeRes.__error) {
+      return res({ status: 'error', message: 'Turnamen dibuat tapi gagal mengacak peserta (HTTP ' + randomizeRes.code + '): ' + randomizeRes.text });
+    }
+
+    const startRes = challongeFetch('put', '/tournaments/' + tournamentId + '/change_state.json', {
+      data: { type: 'TournamentState', attributes: { state: 'start' } }
+    }, 'v2.1');
+    if (startRes.__error) {
+      return res({ status: 'error', message: 'Turnamen dibuat tapi gagal dimulai (HTTP ' + startRes.code + '): ' + startRes.text });
+    }
+    if (startRes.errors) {
+      return res({ status: 'error', message: 'Turnamen dibuat tapi gagal dimulai: ' + JSON.stringify(startRes.errors) });
+    }
+
+    // 4. SIMPAN ke sheet Events
     const eventSheet = SS.getSheetByName("Events");
     const eventValues = eventSheet.getDataRange().getValues();
+    const eventHeaders = eventValues[0];
     const eventRows = eventValues.slice(1);
 
-    const eventIdCol = 0;   // id
-    const idCol = 5;        // challonge_id
-    const urlCol = 6;       // challonge_url
-    const stateCol = 7;     // challonge_state
-    const createdCol = 8;   // created_at
+    const headerMap = {};
+    eventHeaders.forEach((h, i) => {
+      headerMap[String(h).toLowerCase().trim()] = i;
+    });
 
-    let savedRow = -1;
-    for (let i = 0; i < eventRows.length; i++) {
-      if (String(eventRows[i][eventIdCol]) === eventId) {
-        savedRow = i + 2; // +1 header, +1 karena array 0-based
-        break;
+    const challongeCol = headerMap['challonge_url'] !== undefined ? headerMap['challonge_url'] : (headerMap['challongeurl'] !== undefined ? headerMap['challongeurl'] : -1);
+    const idCol = headerMap['challonge_id'] !== undefined ? headerMap['challonge_id'] : (headerMap['challongeid'] !== undefined ? headerMap['challongeid'] : -1);
+    const eventIdCol = headerMap['event_id'] !== undefined ? headerMap['event_id'] : (headerMap['id'] !== undefined ? headerMap['id'] : -1);
+    const stateCol = headerMap['challonge_state'] !== undefined ? headerMap['challonge_state'] : (headerMap['challongestate'] !== undefined ? headerMap['challongestate'] : -1);
+    const createdCol = headerMap['created_at'] !== undefined ? headerMap['created_at'] : -1;
+    const tournamentStatusCol = headerMap['tournament_status'];
+
+    let targetRowNumber = -1;
+
+    if (eventIdCol >= 0) {
+      for (let i = 0; i < eventRows.length; i++) {
+        if (String(eventRows[i][eventIdCol]) === eventId) {
+          targetRowNumber = i + 2;
+          if (challongeCol >= 0) eventSheet.getRange(targetRowNumber, challongeCol + 1).setValue(challongeUrl);
+          if (idCol >= 0) eventSheet.getRange(targetRowNumber, idCol + 1).setValue(tournamentId);
+          if (stateCol >= 0) eventSheet.getRange(targetRowNumber, stateCol + 1).setValue('started');
+          if (createdCol >= 0) {
+            const now = new Date();
+            eventSheet.getRange(targetRowNumber, createdCol + 1).setValue(now.toISOString());
+          }
+          break;
+        }
+      }
+    } else {
+      const fallbackIdCol = headerMap['event_id'] !== undefined ? headerMap['event_id'] : (headerMap['id'] !== undefined ? headerMap['id'] : 0);
+      const fallbackUrlCol = headerMap['challonge_url'] !== undefined ? headerMap['challonge_url'] : (headerMap['challongeurl'] !== undefined ? headerMap['challongeurl'] : 6);
+      const fallbackIdTournamentCol = headerMap['challonge_id'] !== undefined ? headerMap['challonge_id'] : (headerMap['challongeid'] !== undefined ? headerMap['challongeid'] : 5);
+      const fallbackStateCol = headerMap['challonge_state'] !== undefined ? headerMap['challonge_state'] : (headerMap['challongestate'] !== undefined ? headerMap['challongestate'] : 7);
+      
+      for (let i = 0; i < eventRows.length; i++) {
+        if (String(eventRows[i][fallbackIdCol]) === eventId) {
+          targetRowNumber = i + 2;
+          eventSheet.getRange(targetRowNumber, fallbackUrlCol + 1).setValue(challongeUrl);
+          eventSheet.getRange(targetRowNumber, fallbackIdTournamentCol + 1).setValue(tournamentId);
+          eventSheet.getRange(targetRowNumber, fallbackStateCol + 1).setValue('started');
+          break;
+        }
       }
     }
 
-    if (savedRow === -1) {
-      console.error('createTournament: baris event tidak ditemukan di sheet Events untuk eventId=' + eventId);
-    } else {
-      eventSheet.getRange(savedRow, urlCol + 1).setValue(challongeUrl);
-      eventSheet.getRange(savedRow, idCol + 1).setValue(tournamentId);
-      eventSheet.getRange(savedRow, stateCol + 1).setValue('pending');
-      eventSheet.getRange(savedRow, createdCol + 1).setValue(createdAt);
+    if (targetRowNumber < 1 || tournamentStatusCol === undefined) {
+      return res({
+        status: 'error',
+        message: 'Gagal menemukan baris atau kolom tournament_status untuk event ' + eventId + '. Pastikan header Events memiliki kolom tournament_status.'
+      });
     }
 
-    // 4. TIDAK start — kembalikan success
+    eventSheet.getRange(targetRowNumber, tournamentStatusCol + 1).setValue('running');
+
+    const readBackValue = eventSheet.getRange(targetRowNumber, tournamentStatusCol + 1).getDisplayValue();
+    Logger.log('[GENERATE BRACKET STATUS] eventId=' + eventId + ' tournament_status=' + readBackValue);
+
+    if (String(readBackValue || '').toLowerCase().trim() !== 'running') {
+      return res({
+        status: 'error',
+        message: 'Gagal menulis tournament_status=running untuk event ' + eventId + '. Nilai terbaca: ' + readBackValue
+      });
+    }
+
     return res({
       status: 'success',
       challongeUrl: challongeUrl,
       challongeId: tournamentId,
-      challongeState: 'pending',
+      challongeState: 'started',
+      tournament_status: 'running',
       createdAt: createdAt
     });
 
   } catch (err) {
     return res({ status: 'error', message: 'Gagal membuat turnamen: ' + err.message });
   }
+}
+
+function finishTournament(data) {
+  const eventId = String(data.eventId || '').trim();
+  if (!eventId) return res({ status: 'error', message: 'eventId wajib diisi' });
+
+  const eventSheet = SS.getSheetByName("Events");
+  if (!eventSheet) return res({ status: 'error', message: 'Sheet Events tidak ditemukan' });
+
+  const eventValues = eventSheet.getDataRange().getValues();
+  const eventHeaders = eventValues[0];
+  const eventRows = eventValues.slice(1);
+  const eventMap = {};
+  eventHeaders.forEach((h, i) => {
+    eventMap[String(h).toLowerCase().trim()] = i;
+  });
+
+  const eventIdCol = eventMap['event_id'] !== undefined ? eventMap['event_id'] : eventMap['id'];
+  const statusCol = eventMap['status'];
+  const tournamentStatusCol = eventMap['tournament_status'];
+
+  if (eventIdCol === undefined) {
+    return res({ status: 'error', message: 'Header event_id tidak ditemukan di Events' });
+  }
+
+  const targetRowIndex = eventRows.findIndex(r =>
+    String(r[eventIdCol] || '').trim() === eventId
+  );
+
+  if (targetRowIndex === -1) {
+    return res({ status: 'error', message: 'Event tidak ditemukan' });
+  }
+
+  const currentStatus = statusCol !== undefined
+    ? String(eventRows[targetRowIndex][statusCol] || '').toLowerCase().trim()
+    : '';
+
+  if (currentStatus !== 'aktif') {
+    return res({ status: 'error', message: 'Event tidak aktif. Tidak dapat menyelesaikan tournament.' });
+  }
+
+  const currentTournamentStatus = tournamentStatusCol !== undefined
+    ? String(eventRows[targetRowIndex][tournamentStatusCol] || '').toLowerCase().trim()
+    : 'not_started';
+
+  if (currentTournamentStatus !== 'running') {
+    return res({ status: 'error', message: 'Tournament belum berjalan. Tidak dapat diselesaikan.', code: 'not_running' });
+  }
+
+  if (tournamentStatusCol >= 0) {
+    eventSheet.getRange(targetRowIndex + 2, tournamentStatusCol + 1).setValue('finished');
+  }
+
+  return res({
+    status: 'success',
+    eventId: eventId,
+    tournament_status: 'finished'
+  });
 }
 
 // ============================================
@@ -970,17 +5075,22 @@ function lookupTournamentId(slug) {
   const eventValues = eventSheet.getDataRange().getValues();
   const eventHeaders = eventValues[0];
   const eventRows = eventValues.slice(1);
-  const urlCol = eventHeaders.findIndex(h => String(h).toLowerCase() === 'challongeurl');
-  const idCol = eventHeaders.findIndex(h => String(h).toLowerCase() === 'challongeid');
-  const uCol = urlCol >= 0 ? urlCol : 6;
-  const iCol = idCol >= 0 ? idCol : 5;
+
+  const headerMap = {};
+  eventHeaders.forEach((h, i) => {
+    headerMap[String(h).toLowerCase().trim()] = i;
+  });
+
+  const urlCol = headerMap['challonge_url'] !== undefined ? headerMap['challonge_url'] : (headerMap['challongeurl'] !== undefined ? headerMap['challongeurl'] : 6);
+  const idCol = headerMap['challonge_id'] !== undefined ? headerMap['challonge_id'] : (headerMap['challongeid'] !== undefined ? headerMap['challongeid'] : 5);
+  
   for (let i = 0; i < eventRows.length; i++) {
-    const rowUrl = String(eventRows[i][uCol] || '');
+    const rowUrl = String(eventRows[i][urlCol] || '');
     const rowUrlSlug = rowUrl.indexOf('challonge.com') !== -1
       ? rowUrl.replace(/\/+$/, '').substring(rowUrl.replace(/\/+$/, '').lastIndexOf('/') + 1)
       : rowUrl;
     if (rowUrlSlug === slug || rowUrl === slug) {
-      const id = String(eventRows[i][iCol] || '').trim();
+      const id = String(eventRows[i][idCol] || '').trim();
       return id || null;
     }
   }
@@ -1029,8 +5139,6 @@ function getOpenMatches(tournamentUrl) {
     const participantList = participantsRaw.map(p => {
       const participant = p.participant || p;
       const attr = participant.attributes || participant;
-      // LANGKAH 2: baca field dari response runtime, jangan asumsi.
-      // Cek beberapa kemungkinan lokasi sebelum fallback 0.
       const num = (...cands) => {
         for (const c of cands) {
           if (c != null && !isNaN(Number(c))) return Number(c);
@@ -1044,9 +5152,31 @@ function getOpenMatches(tournamentUrl) {
         match_wins: num(attr.match_wins, attr.stats && attr.stats.match_wins),
         match_losses: num(attr.match_losses, attr.stats && attr.stats.match_losses),
         buchholz: num(attr.buchholz, attr.stats && attr.stats.buchholz),
-        points_diff: num(attr.points_diff, attr.stats && attr.stats.points_diff),
+        points_diff: num(attr.points_diff, attr.stats && attr.stats.points_diff, attr.ranking && attr.ranking.points_diff),
         final_rank: num(attr.final_rank, attr.rank, attr.final_rank)
       };
+    });
+
+    const mappingSheet = SS.getSheetByName('TournamentParticipants');
+    let participantMapping = {};
+    if (mappingSheet && tournamentId) {
+      const mappingValues = mappingSheet.getDataRange().getValues();
+      if (mappingValues.length >= 2) {
+        mappingValues.slice(1).forEach(row => {
+          const pid = String(row[0] || '').trim();
+          const tid = String(row[2] || '').trim();
+          const gid = String(row[3] || '').trim();
+          if (pid && tid === String(tournamentId) && gid) {
+            participantMapping[pid] = gid;
+          }
+        });
+      }
+    }
+
+    participantList.forEach(participant => {
+      if (participant && participant.id && participantMapping[participant.id]) {
+        participant.googleId = participantMapping[participant.id];
+      }
     });
 
     // LANGKAH 3 & 4: participantMap lengkap (bukan hanya name)
@@ -1056,6 +5186,7 @@ function getOpenMatches(tournamentUrl) {
         participantMap[participant.id] = {
           id: participant.id,
           name: participant.name,
+          googleId: participant.googleId || '',
           points: participant.points,
           match_wins: participant.match_wins,
           match_losses: participant.match_losses,
@@ -1256,7 +5387,6 @@ function startTournament(data) {
     }
 
     // AMBIL challonge_id DARI SHEET EVENTS (bukan pakai slug sebagai identifier).
-    // Struktur: id(0) nama(1) tanggal(2) lokasi(3) status(4) challonge_id(5) challonge_url(6) challonge_state(7) created_at(8)
     let challongeId = '';
     let challongeUrlSheet = '';
     try {
@@ -1264,22 +5394,22 @@ function startTournament(data) {
       const eventValues = eventSheet.getDataRange().getValues();
       const eventHeaders = eventValues[0];
       const eventRows = eventValues.slice(1);
-      const urlCol = eventHeaders.findIndex(h => String(h).toLowerCase() === 'challongeurl');
-      const idCol = eventHeaders.findIndex(h => String(h).toLowerCase() === 'challongeid');
-      const norm = (s) => String(s || '').toLowerCase().replace(/[_\s]/g, '');
-      const findCol = (name, fallback) => {
-        const i = eventHeaders.findIndex(h => norm(h) === norm(name));
-        return i >= 0 ? i : fallback;
-      };
-      const uCol = urlCol >= 0 ? urlCol : 6;
-      const iCol = idCol >= 0 ? idCol : 5;
+
+      const headerMap = {};
+      eventHeaders.forEach((h, i) => {
+        headerMap[String(h).toLowerCase().trim()] = i;
+      });
+
+      const urlCol = headerMap['challonge_url'] !== undefined ? headerMap['challonge_url'] : (headerMap['challongeurl'] !== undefined ? headerMap['challongeurl'] : 6);
+      const idCol = headerMap['challonge_id'] !== undefined ? headerMap['challonge_id'] : (headerMap['challongeid'] !== undefined ? headerMap['challongeid'] : 5);
+      
       for (let i = 0; i < eventRows.length; i++) {
-        const rowUrl = String(eventRows[i][uCol] || '');
+        const rowUrl = String(eventRows[i][urlCol] || '');
         const rowUrlSlug = rowUrl.indexOf('challonge.com') !== -1
           ? rowUrl.replace(/\/+$/, '').substring(rowUrl.replace(/\/+$/, '').lastIndexOf('/') + 1)
           : rowUrl;
         if (rowUrlSlug === slug || rowUrl === slug) {
-          challongeId = String(eventRows[i][iCol] || '').trim();
+          challongeId = String(eventRows[i][idCol] || '').trim();
           challongeUrlSheet = rowUrl;
           break;
         }
@@ -1352,8 +5482,15 @@ function startTournament(data) {
       const eventValues = eventSheet.getDataRange().getValues();
       const eventHeaders = eventValues[0];
       const eventRows = eventValues.slice(1);
-      const urlCol = eventHeaders.findIndex(h => String(h).toLowerCase() === 'challongeurl');
-      const stateCol = eventHeaders.findIndex(h => String(h).toLowerCase() === 'challongestate');
+
+      const headerMap = {};
+      eventHeaders.forEach((h, i) => {
+        headerMap[String(h).toLowerCase().trim()] = i;
+      });
+
+      const urlCol = headerMap['challonge_url'] !== undefined ? headerMap['challonge_url'] : (headerMap['challongeurl'] !== undefined ? headerMap['challongeurl'] : -1);
+      const stateCol = headerMap['challonge_state'] !== undefined ? headerMap['challonge_state'] : (headerMap['challongestate'] !== undefined ? headerMap['challongestate'] : -1);
+      
       if (urlCol >= 0 && stateCol >= 0) {
         const fullUrl = 'https://challonge.com/' + slug;
         for (let i = 0; i < eventRows.length; i++) {
@@ -1399,22 +5536,22 @@ function randomizeParticipants(data) {
       const eventValues = eventSheet.getDataRange().getValues();
       const eventHeaders = eventValues[0];
       const eventRows = eventValues.slice(1);
-      const urlCol = eventHeaders.findIndex(h => String(h).toLowerCase() === 'challongeurl');
-      const idCol = eventHeaders.findIndex(h => String(h).toLowerCase() === 'challongeid');
-      const norm = (s) => String(s || '').toLowerCase().replace(/[_\s]/g, '');
-      const findCol = (name, fallback) => {
-        const i = eventHeaders.findIndex(h => norm(h) === norm(name));
-        return i >= 0 ? i : fallback;
-      };
-      const uCol = urlCol >= 0 ? urlCol : 6;
-      const iCol = idCol >= 0 ? idCol : 5;
+
+      const headerMap = {};
+      eventHeaders.forEach((h, i) => {
+        headerMap[String(h).toLowerCase().trim()] = i;
+      });
+
+      const urlCol = headerMap['challonge_url'] !== undefined ? headerMap['challonge_url'] : (headerMap['challongeurl'] !== undefined ? headerMap['challongeurl'] : 6);
+      const idCol = headerMap['challonge_id'] !== undefined ? headerMap['challonge_id'] : (headerMap['challongeid'] !== undefined ? headerMap['challongeid'] : 5);
+      
       for (let i = 0; i < eventRows.length; i++) {
-        const rowUrl = String(eventRows[i][uCol] || '');
+        const rowUrl = String(eventRows[i][urlCol] || '');
         const rowUrlSlug = rowUrl.indexOf('challonge.com') !== -1
           ? rowUrl.replace(/\/+$/, '').substring(rowUrl.replace(/\/+$/, '').lastIndexOf('/') + 1)
           : rowUrl;
         if (rowUrlSlug === slug || rowUrl === slug) {
-          challongeId = String(eventRows[i][iCol] || '').trim();
+          challongeId = String(eventRows[i][idCol] || '').trim();
           break;
         }
       }
@@ -1502,10 +5639,20 @@ function updateSwissRounds(data) {
 // EXPORT STANDINGS KE GOOGLE SPREADSHEET
 // ============================================
 function exportStandings(data) {
+  const result = performExportStandings(data);
+  return res(result);
+}
+
+function performExportStandings(data) {
+  Logger.log('EXPORT_STANDINGS_VERSION=V4A4-FINAL');
   try {
     const sheetName = String(data.sheetName || '').trim();
+    const eventId = String(data.eventId || '').trim();
     if (!sheetName) {
-      return res({ status: 'error', message: 'Nama sheet tidak boleh kosong' });
+      return { status: 'error', message: 'Nama sheet tidak boleh kosong' };
+    }
+    if (!eventId) {
+      return { status: 'error', message: 'eventId wajib diisi untuk export standings' };
     }
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1521,9 +5668,12 @@ function exportStandings(data) {
       }
     }
 
-    const LEAGUE_POINTS_DISTRIBUTION = [20, 17, 15, 13, 11, 9, 8, 7, 6, 5, 4, 3, 2, 1, 1, 1];
+    const LEAGUE_POINTS_DISTRIBUTION = [
+      25, 20, 16, 13, 11, 10, 9, 8,
+      7, 6, 5, 4, 3, 2, 1, 1
+    ];
+
     const payload = data.payload || [];
-    const optionalPoints = data.optionalPoints || {};
 
     const suffix = (n) => {
       const j = n % 10, k = n % 100;
@@ -1533,52 +5683,220 @@ function exportStandings(data) {
       return n + 'th';
     };
 
+    const getLeaguePoints = (rank) => {
+      const numericRank = Number(rank);
+      if (!Number.isFinite(numericRank) || numericRank < 1) {
+        return 0;
+      }
+      if (numericRank >= 15) {
+        return 1;
+      }
+      return LEAGUE_POINTS_DISTRIBUTION[numericRank - 1] || 1;
+    };
+
+    let tournamentId = '';
+    try {
+      const eventSheet = SS.getSheetByName("Events");
+      if (eventSheet) {
+        const eventValues = eventSheet.getDataRange().getValues();
+        const eventHeaders = eventValues[0];
+        const eventRows = eventValues.slice(1);
+        const eventMap = {};
+        eventHeaders.forEach((h, i) => {
+          eventMap[String(h).toLowerCase().trim()] = i;
+        });
+        const eventIdCol = eventMap['event_id'] !== undefined ? eventMap['event_id'] : eventMap['id'];
+        const challongeIdCol = eventMap['challonge_id'] !== undefined ? eventMap['challonge_id'] : eventMap['challongeid'];
+        if (eventIdCol !== undefined && challongeIdCol !== undefined) {
+          for (let i = 0; i < eventRows.length; i++) {
+            if (String(eventRows[i][eventIdCol] || '').trim() === eventId) {
+              tournamentId = String(eventRows[i][challongeIdCol] || '').trim();
+              break;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Gagal baca tournamentId dari sheet Events: ' + e.message);
+    }
+
+    const attendanceSheet = SS.getSheetByName('Attendance');
+    let attendanceMap = {};
+    let duplicateNicknames = [];
+    let attendanceMeta = {
+      sheetName: '',
+      headers: [],
+      totalRows: 0,
+      eventRows: 0,
+      legendringRow: null
+    };
+    if (attendanceSheet) {
+      const attendanceValues = attendanceSheet.getDataRange().getValues();
+      attendanceMeta.sheetName = attendanceSheet.getName();
+      attendanceMeta.headers = attendanceValues[0] || [];
+      attendanceMeta.totalRows = attendanceValues.length;
+      if (attendanceValues.length >= 2) {
+        const attendanceHeaders = attendanceValues[0];
+        const attendanceRows = attendanceValues.slice(1);
+        const attendanceHeaderMap = {};
+        attendanceHeaders.forEach((h, i) => {
+          attendanceHeaderMap[String(h).toLowerCase().trim()] = i;
+        });
+        Logger.log('EXPORT_STANDINGS_VERSION=V4A4-FINAL');
+        Logger.log('ATTENDANCE HEADERS EXACT: ' + JSON.stringify(attendanceHeaderMap));
+        const attendanceEventIdCol = attendanceHeaderMap['event_id'];
+        const attendanceGoogleIdCol = attendanceHeaderMap['google_id'];
+        const attendanceNamaCol = attendanceHeaderMap['nama'];
+
+        if (attendanceEventIdCol !== undefined && attendanceGoogleIdCol !== undefined && attendanceNamaCol !== undefined) {
+          const tempMap = {};
+          attendanceRows.forEach(row => {
+            const rowEventId = normalizeId(row[attendanceEventIdCol]);
+            if (rowEventId !== normalizeId(eventId)) {
+              return;
+            }
+            attendanceMeta.eventRows++;
+            const gId = normalizeId(row[attendanceGoogleIdCol]);
+            const nick = normalizeKey(row[attendanceNamaCol]);
+            if (!gId || !nick) return;
+            if (tempMap[nick]) {
+              duplicateNicknames.push({
+                nama: row[attendanceNamaCol],
+                googleId: gId
+              });
+            }
+            tempMap[nick] = gId;
+            if (nick === 'lgendring') {
+              attendanceMeta.legendringRow = {
+                nama: row[attendanceNamaCol],
+                googleId: gId,
+                eventId: rowEventId
+              };
+            }
+          });
+          attendanceMap = tempMap;
+        }
+      }
+    }
+
+    if (duplicateNicknames.length > 0) {
+      return {
+        status: 'error',
+        message: 'Duplicate nama di Attendance untuk event ' + eventId + ': ' + duplicateNicknames.map(d => d.nama + ' (' + d.googleId + ')').join(', ')
+      };
+    }
+
+    Logger.log(
+      'ATTENDANCE MAP COUNT=' +
+      Object.keys(attendanceMap).length
+    );
+
+    Logger.log(
+      'ATTENDANCE E9 TEST | eventId=' +
+      eventId +
+      ' | Lgendring=' +
+      (attendanceMap['lgendring'] || 'NOT_FOUND')
+    );
+
+    if (!attendanceMap['lgendring']) {
+      Logger.log('ATTENDANCE DEBUG META | ' + JSON.stringify(attendanceMeta));
+      return {
+        status: 'error',
+        message: 'Attendance E9 tidak terbaca. Cek log DEBUG META.'
+      };
+    }
+
+    const missingGoogleIds = [];
     const data2D = payload.map((p, index) => {
-      const opt = optionalPoints[p.id] != null ? optionalPoints[p.id] : '';
+      const name = String(p.name || '').trim();
+      const normalizedName = normalizeKey(name);
+      const googleId = attendanceMap[normalizedName] || '';
+      Logger.log({
+        name: p.name,
+        normalizedName: normalizedName,
+        googleId: googleId
+      });
+      if (!googleId) {
+        missingGoogleIds.push({
+          index: index + 1,
+          nama: name
+        });
+      }
       return [
         suffix(index + 1),
-        LEAGUE_POINTS_DISTRIBUTION[index] || 0,
+        getLeaguePoints(index + 1),
+        googleId,
         p.name || 'Unknown',
         (p.wins || 0) + '-' + (p.losses || 0),
         p.wins || 0,
         p.pointFinish || 0,
-        opt
+        eventId
       ];
     });
 
-    sheet.getRange(3, 1, 20, 7).clearContent();
-
-    if (data2D.length > 0) {
-      sheet.getRange(3, 1, data2D.length, 7).setValues(data2D);
+    if (missingGoogleIds.length > 0) {
+      return {
+        status: 'error',
+        message: 'Google ID tidak ditemukan melalui Attendance:\n' + missingGoogleIds.map(m => 'event=' + eventId + ' nama=' + m.nama).join('\n')
+      };
     }
 
-    return res({ status: 'success', message: 'Berhasil rekap ke sheet "' + sheetName + '" (' + data2D.length + ' baris)' });
+    sheet.getRange(3, 1, 20, 8).clearContent();
+
+    if (data2D.length > 0) {
+      sheet.getRange(3, 1, data2D.length, 8).setValues(data2D);
+    }
+
+    invalidateTournamentResultSheetIndex();
+    return { status: 'success', message: 'Berhasil rekap ke sheet "' + sheetName + '" (' + data2D.length + ' baris)', eventId: eventId, tournamentId: tournamentId };
   } catch (err) {
     console.error('exportStandings error: ' + err.message);
-    return res({ status: 'error', message: 'Gagal exportStandings: ' + err.message });
+    return { status: 'error', message: 'Gagal exportStandings: ' + err.message };
   }
 }
 function getActiveEvent() {
   try {
-    const sheet = SS.getActiveSheet();
+    const sheet = SS.getSheetByName("Events");
+    if (!sheet) return res({ status: 'error', message: 'Sheet Events tidak ditemukan' });
+
     const data = sheet.getDataRange().getValues();
     const headers = data[0];
+    const map = {};
+    headers.forEach((h, i) => {
+      map[String(h).toLowerCase().trim()] = i;
+    });
+
     let activeEvent = null;
+    const statusIdx = map['status'];
+    const idIdx = map['event_id'] !== undefined ? map['event_id'] : map['id'];
+    const namaIdx = map['nama'];
+    const urlIdx = map['challonge_url'] !== undefined ? map['challonge_url'] : map['challongeurl'];
+    const waktuIdx = map['waktu_event'] !== undefined ? map['waktu_event'] : (map['waktu'] !== undefined ? map['waktu'] : -1);
+    const tournamentStatusIdx = map['tournament_status'];
 
     for (let i = 1; i < data.length; i++) {
       const row = data[i];
-      const status = String(row[4] || '').toLowerCase();
+      const status = String(row[statusIdx] || '').toLowerCase().trim();
       if (status === 'aktif') {
         activeEvent = {
-          eventName: String(row[1] || ''),
-          rawUrl: String(row[6] || ''), // kolom G = challonge_url
-          waktu: String(row[9] || '').trim() // kolom J = waktu
+          event_id: String(row[idIdx] || ''),
+          eventName: String(row[namaIdx] || ''),
+          rawUrl: String(row[urlIdx] || ''),
+          waktu: waktuIdx >= 0 ? String(row[waktuIdx] || '').trim() : '',
+          status: String(row[statusIdx] || '').toLowerCase().trim(),
+          tournament_status: tournamentStatusIdx !== undefined ? String(row[tournamentStatusIdx] || '').toLowerCase().trim() : 'not_started'
         };
         break;
       }
     }
 
-    if (!activeEvent || !activeEvent.rawUrl) {
+    if (!activeEvent) {
+      Logger.log('[getActiveEvent] TIDAK ADA EVENT AKTIF');
+      return res({ status: 'error', message: 'TIDAK ADA EVENT AKTIF' });
+    }
+
+    if (!activeEvent.rawUrl) {
+      Logger.log('[getActiveEvent] eventId=' + activeEvent.event_id + ' status=' + activeEvent.status + ' challonge_url kosong');
       return res({ status: 'error', message: 'TIDAK ADA EVENT AKTIF' });
     }
 
@@ -1594,9 +5912,102 @@ function getActiveEvent() {
       extractedId = slug;
     }
 
-    return res({ status: 'success', eventName: activeEvent.eventName, challongeUrl: extractedId, waktu: activeEvent.waktu });
+    Logger.log('[getActiveEvent] eventId=' + activeEvent.event_id + ' status=' + activeEvent.status + ' tournament_status=' + activeEvent.tournament_status);
+
+    return res({
+      status: 'success',
+      eventName: activeEvent.eventName,
+      challongeUrl: extractedId,
+      waktu: activeEvent.waktu,
+      event_id: activeEvent.event_id,
+      status: activeEvent.status,
+      tournament_status: activeEvent.tournament_status
+    });
   } catch (err) {
     console.error('getActiveEvent error: ' + err.message);
     return res({ status: 'error', message: 'Gagal getActiveEvent: ' + err.message });
   }
+}
+
+function runPhase3ATests() {
+  const results = [];
+  
+  function log(name, pass, detail) {
+    results.push({ name, pass, detail });
+    console.log((pass ? '[PASS]' : '[FAIL]') + ' ' + name + (detail ? ' - ' + detail : ''));
+  }
+
+  try {
+    const eventSheet = SS.getSheetByName("Events");
+    if (!eventSheet) {
+      log('Sheet Events exists', false, 'Sheet Events tidak ditemukan');
+      return res({ tests: results, summary: { total: results.length, passed: results.filter(r => r.pass).length, failed: results.filter(r => !r.pass).length } });
+    }
+
+    const values = eventSheet.getDataRange().getDisplayValues();
+    const headers = values[0];
+    const rows = values.slice(1);
+    const map = getHeaderMap(eventSheet);
+    const eventIdCol = map['event_id'] !== undefined ? map['event_id'] : map['id'];
+    const statusCol = map['status'];
+
+    if (eventIdCol === undefined || statusCol === undefined) {
+      log('Headers valid', false, 'event_id/status tidak ditemukan');
+      return res({ tests: results, summary: { total: results.length, passed: results.filter(r => r.pass).length, failed: results.filter(r => !r.pass).length } });
+    }
+
+    let testEventId = 'E_TEST';
+    let testRowIndex = -1;
+    for (let i = 0; i < rows.length; i++) {
+      if (String(rows[i][eventIdCol] || '').trim() === testEventId) {
+        testRowIndex = i;
+        break;
+      }
+    }
+
+    if (testRowIndex === -1) {
+      eventSheet.appendRow([testEventId, 'Test Event', new Date(), 'Test Lokasi', 'upcoming', '', '', '', '', '2025-01-01', '20:00', '']);
+      const newValues = eventSheet.getDataRange().getDisplayValues();
+      const newRows = newValues.slice(1);
+      testRowIndex = newRows.findIndex(r => String(r[eventIdCol] || '').trim() === testEventId);
+      log('Create test event', true, 'Event ' + testEventId + ' dibuat');
+    }
+
+    const currentTestStatus = String(values[testRowIndex + 1][statusCol] || '').toLowerCase().trim();
+    log('Test event initial status is upcoming', currentTestStatus === 'upcoming', 'status=' + currentTestStatus);
+
+    const startResult = updateEventStatus(testEventId, 'aktif');
+    log('Transition upcoming -> aktif', startResult.status === 'success', startResult.message);
+    
+    const startAgainResult = updateEventStatus(testEventId, 'aktif');
+    log('Transition aktif -> aktif rejected', startAgainResult.status === 'error' && startAgainResult.code === 'already_active', startAgainResult.message);
+
+    const badStartResult = updateEventStatus(testEventId, 'upcoming');
+    log('Transition aktif -> upcoming rejected', badStartResult.status === 'error', badStartResult.message);
+
+    const endResult = updateEventStatus(testEventId, 'selesai');
+    log('Transition aktif -> selesai', endResult.status === 'success', endResult.message);
+
+    const endAgainResult = updateEventStatus(testEventId, 'selesai');
+    log('Transition selesai -> selesai rejected', endAgainResult.status === 'error' && endAgainResult.code === 'already_ended', endAgainResult.message);
+
+    const reactivateResult = updateEventStatus(testEventId, 'aktif');
+    log('Transition selesai -> aktif rejected', reactivateResult.status === 'error' && reactivateResult.code === 'transition_not_allowed', reactivateResult.message);
+
+    const upcomingAfterEndResult = updateEventStatus(testEventId, 'upcoming');
+    log('Transition selesai -> upcoming rejected', upcomingAfterEndResult.status === 'error' && upcomingAfterEndResult.code === 'transition_not_allowed', upcomingAfterEndResult.message);
+
+    updateEventStatus(testEventId, 'aktif');
+    const upcomingToSelesaiResult = updateEventStatus(testEventId, 'selesai');
+    eventSheet.getRange(testRowIndex + 2, statusCol + 1).setValue('upcoming');
+    log('Transition upcoming -> selesai rejected', upcomingToSelesaiResult.status === 'error' && upcomingToSelesaiResult.code === 'transition_not_allowed', upcomingToSelesaiResult.message);
+
+    const cleanupResult = updateEventStatus(testEventId, 'selesai');
+    log('Cleanup test event to selesai', cleanupResult.status === 'success', cleanupResult.message);
+
+  } catch (err) {
+    log('Test runner error', false, err.message);
+  }
+
+  return res({ tests: results, summary: { total: results.length, passed: results.filter(r => r.pass).length, failed: results.filter(r => !r.pass).length } });
 }
