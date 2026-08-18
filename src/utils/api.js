@@ -1,7 +1,6 @@
 import axios from 'axios';
 
-const GAS_URL =
-  "https://script.google.com/macros/s/AKfycbzRfsBt_sDV9TzVnbrKsFXbL61BeA9DA7GkmezMy71SbKrgxf2LtsCMZO_2Dmd3jabz9w/exec";
+const GAS_URL = "https://script.google.com/macros/s/AKfycbzBeIrwujylYMJL8-4ANd-BfWXOHQsfggJ9xAFzKjCkECO3JPCwnqDAKj1Groc6EoFhWQ/exec";
 
 const AXIOS_TIMEOUT = 15000;
 const LONG_RUNNING_TIMEOUT = 120000;
@@ -491,6 +490,14 @@ export const getBeybladeParts = () =>
 
 export const getMyDecks = (params = {}) =>
   postToGas('getMyDecks', params);
+
+export const getActiveDecksByGoogleId = (googleId) =>
+  getFromGas(
+    'getActiveDecksByGoogleId',
+    false,
+    { googleId },
+    { maxRetries: 1 }
+  );
 
 export const createDeck = (payload) =>
   postToGas('createDeck', payload);

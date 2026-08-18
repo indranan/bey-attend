@@ -3,7 +3,62 @@ import { motion, useInView } from 'framer-motion';
 import { Trophy, MapPin, Clock8, Users, ChevronDown, Crown, Medal, Star } from 'lucide-react';
 import UserAvatar from './UserAvatar';
 import PublicNavbar from './PublicNavbar';
+import { getActiveDecksByGoogleId } from '../utils/api';
 import logoLalapan from '../assets/icon.png';
+import { useNavigate } from 'react-router-dom';
+
+const PART_IMAGE_GLOB = import.meta.glob('../assets/beyblade/**/*.png', { eager: true, query: '?url', import: 'default' });
+const PART_IMAGE_GLOB_LOWERCASE = Object.fromEntries(
+  Object.entries(PART_IMAGE_GLOB).map(([key, url]) => [key.toLowerCase(), url])
+);
+
+const PART_TYPE_TO_FOLDER = {
+  'BLADE': 'blade',
+  'ASSIST': 'assist-blade',
+  'ASSIST_BLADE': 'assist-blade',
+  'ASSIST BLADE': 'assist-blade',
+  'LOCK_CHIP': 'lock-chip',
+  'LOCK CHIP': 'lock-chip',
+  'RATCHET': 'ratchet',
+  'BIT': 'bit'
+};
+
+const getPartImage = (part, label) => {
+  if (!part) return '';
+  const partId = String(part.partId || '').trim();
+  if (!partId) return '';
+
+  const normalizedLabel = String(label || '').trim().toUpperCase();
+  const folder = PART_TYPE_TO_FOLDER[normalizedLabel];
+  if (!folder) return '';
+
+  const key = `../assets/beyblade/${folder}/${partId}.png`.toLowerCase();
+  return PART_IMAGE_GLOB_LOWERCASE[key] || '';
+};
+
+
+const getChampionComboName = (deck) => {
+  if (!deck) return '';
+
+  const system = String(deck.system || '').toUpperCase();
+  const getName = (part) => part?.name || '';
+
+  if (system === 'CX') {
+    return [
+      getName(deck.lockChip),
+      getName(deck.blade),
+      getName(deck.assistBlade),
+      getName(deck.ratchet),
+      getName(deck.bit)
+    ].filter(Boolean).join(' ');
+  }
+
+  return [
+    getName(deck.blade),
+    getName(deck.ratchet),
+    getName(deck.bit)
+  ].filter(Boolean).join(' ');
+};
 
 const fadeUp = {
   hidden: { opacity: 0, y: 30 },
@@ -55,6 +110,9 @@ export default function LandingPage({ leaderboard = [], currentEvent = null, isL
   const eventRef = useRef(null);
   const highlightRef = useRef(null);
   const ctaRef = useRef(null);
+  const [championDecks, setChampionDecks] = useState([]);
+  const [championDeckLoading, setChampionDeckLoading] = useState(false);
+  const navigate = useNavigate();
 
   const sortedLeaderboard = Array.isArray(leaderboard)
     ? [...leaderboard].sort((a, b) => {
@@ -68,6 +126,37 @@ export default function LandingPage({ leaderboard = [], currentEvent = null, isL
     : [];
   const top3 = sortedLeaderboard.slice(0, 3);
   const totalBladers = Array.isArray(leaderboard) ? leaderboard.length : 0;
+  const champion = Array.isArray(leaderboard)
+    ? leaderboard.find(item => Number(item?.rank) === 1) || sortedLeaderboard[0] || null
+    : null;
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadChampionDecks = async () => {
+      const googleId = champion?.googleId || champion?.google_id;
+      if (!googleId) {
+        setChampionDecks([]);
+        return;
+      }
+
+      setChampionDeckLoading(true);
+      try {
+        const response = await getActiveDecksByGoogleId(googleId);
+        if (cancelled) return;
+        setChampionDecks(Array.isArray(response?.decks) ? response.decks : []);
+      } catch (error) {
+        if (cancelled) return;
+        console.error('Gagal memuat deck juara:', error);
+        setChampionDecks([]);
+      } finally {
+        if (!cancelled) setChampionDeckLoading(false);
+      }
+    };
+
+    loadChampionDecks();
+    return () => { cancelled = true; };
+  }, [champion?.googleId, champion?.google_id]);
 
   const scrollToSection = (ref) => {
     ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -268,15 +357,15 @@ export default function LandingPage({ leaderboard = [], currentEvent = null, isL
                   top3.map((item, index) => {
                     const rankConfig = getRankConfig(index);
                     return (
-                       <motion.div
-                         key={item.name}
-                         custom={index}
-                         variants={fadeUp}
-                         initial="hidden"
-                         animate="visible"
-                         whileHover={{ scale: 1.02, y: -2 }}
-                         className={`relative flex items-center gap-4 p-4 rounded-2xl border ${rankConfig.bg} ${rankConfig.border} ${rankConfig.shadow} transition-all cursor-default`}
-                       >
+                      <motion.div
+                        key={item.name}
+                        custom={index}
+                        variants={fadeUp}
+                        initial="hidden"
+                        animate="visible"
+                        whileHover={{ scale: 1.02, y: -2 }}
+                        className={`relative flex items-center gap-4 p-4 rounded-2xl border ${rankConfig.bg} ${rankConfig.border} ${rankConfig.shadow} transition-all cursor-default`}
+                      >
                         <div className="flex-shrink-0 w-12 h-12 rounded-xl bg-gray-900/60 border border-white/5 flex flex-col items-center justify-center">
                           <span className={`text-lg font-black ${rankConfig.color}`}>{rankConfig.label}</span>
                         </div>
@@ -315,7 +404,10 @@ export default function LandingPage({ leaderboard = [], currentEvent = null, isL
               <div className="mt-4 pt-4 border-t border-white/5">
                 <button
                   type="button"
-                  onClick={() => { }}
+                  onClick={() => {
+                    navigate('/ranking');
+                    window.scrollTo(0, 0);
+                  }}
                   className="w-full py-3 rounded-xl bg-gray-800/50 border border-white/5 text-[10px] font-black uppercase tracking-widest text-gray-400 hover:text-white hover:border-white/10 transition-all"
                 >
                   Lihat Klasemen Lengkap
@@ -384,6 +476,16 @@ export default function LandingPage({ leaderboard = [], currentEvent = null, isL
                           <span>{currentEvent.waktu}</span>
                         </div>
                       )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigate('/events');
+                          window.scrollTo(0, 0);
+                        }}
+                        className="w-full mt-5 py-3 rounded-xl bg-gray-800/50 border border-white/5 text-[10px] font-black uppercase tracking-widest text-gray-400 hover:text-white hover:border-blue-400/30 hover:bg-blue-500/10 transition-all"
+                      >
+                        Lihat Detail Event
+                      </button>
                       {currentEvent.count !== undefined && (
                         <div className="flex items-center gap-2.5 text-xs font-bold text-gray-300">
                           <div className="w-7 h-7 rounded-lg bg-gray-800/80 flex items-center justify-center flex-shrink-0">
@@ -419,7 +521,7 @@ export default function LandingPage({ leaderboard = [], currentEvent = null, isL
         </div>
       </section>
 
-      {/* ===== HIGHLIGHT SECTION ===== */}
+      {/* ===== CHAMPION DECK SECTION ===== */}
       <section ref={highlightRef} className="relative py-16 px-6">
         <div className="max-w-6xl mx-auto">
           <motion.div
@@ -428,73 +530,144 @@ export default function LandingPage({ leaderboard = [], currentEvent = null, isL
             viewport={{ once: true, margin: '-80px' }}
             className="text-center mb-10"
           >
-            <span className="inline-block px-4 py-2 rounded-full bg-purple-500/10 border border-purple-500/30 text-purple-400 text-[10px] font-black uppercase tracking-[0.2em] mb-4">
-              Meta & Highlight
+            <span className="inline-block px-4 py-2 rounded-full bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 text-[10px] font-black uppercase tracking-[0.2em] mb-4">
+              Champion Deck
             </span>
             <h2 className="text-3xl md:text-4xl font-black italic uppercase tracking-tight">
-              <span className="bg-gradient-to-r from-purple-400 via-pink-400 to-blue-400 bg-clip-text text-transparent">
-                Combo Juara Minggu Lalu
+              <span className="bg-gradient-to-r from-yellow-300 via-orange-400 to-yellow-500 bg-clip-text text-transparent">
+                Deck Sang Juara
               </span>
             </h2>
-            <p className="text-gray-500 text-xs font-bold uppercase tracking-wider mt-3 max-w-xl mx-auto">
-              Racikan parts andalan para blader pro yang mendominasi arena
+            <p className="text-gray-500 text-xs font-bold uppercase tracking-wider mt-3 max-w-2xl mx-auto">
+              Build aktif milik blader peringkat #1 pada klasemen saat ini
             </p>
           </motion.div>
 
-          <motion.div
-            initial="hidden"
-            whileInView="visible"
-            viewport={{ once: true, margin: '-60px' }}
-            className="grid grid-cols-1 md:grid-cols-3 gap-5"
-          >
-            {[
-              {
-                title: 'Shark Edge Variant',
-                desc: 'BX-05 / BX-06 menjadi primadona di turnamen minggu ke-3. Performa burst protection dan stamina yang konsisten membuatnya menjadi pilihan utama untuk format Swiss.',
-                tag: 'Meta',
-                tagColor: 'text-blue-400 border-blue-500/30 bg-blue-500/10',
-                icon: '⚡'
-              },
-              {
-                title: 'Hells Scythe UX',
-                desc: 'Varian UX dengan rubber tip menghasilkan kontrol luar biasa padaakhir putaran. Cocok untuk blader yang suka gaya bertahan lalu mematikan lawan di detik akhir.',
-                tag: 'Top Pick',
-                tagColor: 'text-purple-400 border-purple-500/30 bg-purple-500/10',
-                icon: '🔥'
-              },
-              {
-                title: 'Whale King Wide',
-                desc: 'Danstill wide type yang menahan serangan agresif. Efektif melawan blade attack dengan weight distribution yang optimal untuk pertarungan 3vs3.',
-                tag: 'Stamina',
-                tagColor: 'text-green-400 border-green-500/30 bg-green-500/10',
-                icon: '🛡️'
-              }
-            ].map((card, index) => (
-              <motion.div
-                key={index}
-                custom={index}
-                variants={fadeUp}
-                whileHover={{ y: -6, scale: 1.01 }}
-                className="group relative bg-gray-900/60 backdrop-blur-sm rounded-[1.5rem] p-6 border border-white/5 hover:border-white/10 transition-all duration-300 overflow-hidden"
-              >
-                <div className="absolute inset-0 bg-gradient-to-br from-white/[0.02] to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none" />
-                <div className="relative z-10">
-                  <div className="flex items-center justify-between mb-4">
-                    <span className="text-3xl">{card.icon}</span>
-                    <span className={`px-3 py-1 rounded-full border text-[9px] font-black uppercase tracking-wider ${card.tagColor}`}>
-                      {card.tag}
-                    </span>
+          {!champion ? (
+            <div className="text-center py-12 bg-gray-900/60 rounded-[1.5rem] border border-white/5">
+              <p className="text-[10px] font-black text-gray-600 uppercase tracking-widest">
+                Belum ada juara aktif
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="flex flex-col md:flex-row items-center justify-between gap-4 mb-6">
+                <div className="flex items-center gap-3">
+                  <UserAvatar
+                    src={champion.foto}
+                    name={champion.name}
+                    className="w-12 h-12 rounded-xl border-2 border-yellow-500/30 object-cover"
+                  />
+                  <div>
+                    <p className="text-[9px] font-black text-yellow-400 uppercase tracking-widest">Rank #1</p>
+                    <h3 className="text-xl font-black italic uppercase tracking-tight">{champion.name || 'Unknown Blader'}</h3>
                   </div>
-                  <h4 className="text-base font-black tracking-tight mb-3 group-hover:text-white transition-colors">
-                    {card.title}
-                  </h4>
-                  <p className="text-[11px] text-gray-500 font-medium leading-relaxed">
-                    {card.desc}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const profileId = champion.publicProfileId || champion.public_profile_id;
+                    if (profileId) {
+                      window.location.href = `/bladers/${profileId}`;
+                    }
+                  }}
+                  className="px-5 py-2.5 rounded-xl bg-gray-800/60 border border-white/10 text-[10px] font-black uppercase tracking-widest text-gray-300 hover:text-white hover:border-yellow-500/30 transition-all"
+                >
+                  Lihat Profil Juara
+                </button>
+              </div>
+
+              {championDeckLoading ? (
+                <div className="text-center py-12 bg-gray-900/60 rounded-[1.5rem] border border-white/5">
+                  <div className="inline-block w-6 h-6 border-2 border-yellow-400 border-t-transparent rounded-full animate-spin mb-3" />
+                  <p className="text-[10px] font-black text-gray-600 uppercase tracking-widest">Memuat deck juara...</p>
+                </div>
+              ) : championDecks.length === 0 ? (
+                <div className="text-center py-12 bg-gray-900/60 rounded-[1.5rem] border border-dashed border-gray-800">
+                  <p className="text-[10px] font-black text-gray-600 uppercase tracking-widest">
+                    Juara belum memiliki deck aktif
                   </p>
                 </div>
-              </motion.div>
-            ))}
-          </motion.div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                  {championDecks.map((deck, index) => (
+                    <motion.div
+                      key={deck.deckId || index}
+                      custom={index}
+                      variants={fadeUp}
+                      initial="hidden"
+                      whileInView="visible"
+                      viewport={{ once: true, margin: '-40px' }}
+                      className="group bg-gray-900/70 backdrop-blur-sm rounded-[1.5rem] p-5 border border-white/5 hover:border-yellow-500/20 transition-all"
+                    >
+                      <div className="flex items-center justify-between gap-3 mb-4">
+                        <div>
+                          <p className="text-[9px] font-black text-yellow-400 uppercase tracking-widest">Combo Deck {index + 1}</p>
+                          <h4 className="text-base font-black tracking-tight truncate">{getChampionComboName(deck) || deck.deckName || 'Unnamed Deck'}</h4>
+                        </div>
+                        <span className="px-2.5 py-1 rounded-full bg-green-500/10 border border-green-500/30 text-[8px] font-black text-green-400 uppercase tracking-widest">
+                          {deck.system || 'Beyblade X'}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        {[
+                          ['Blade', deck.blade],
+                          ['Assist', deck.assistBlade],
+                          ['Lock Chip', deck.lockChip],
+                          ['Ratchet', deck.ratchet],
+                          ['Bit', deck.bit]
+                        ].filter(([, part]) => part).map(([label, part]) => {
+                          const image = getPartImage(part, label);
+                          return (
+                            <motion.div
+                              key={label}
+                              whileHover={{ y: -4, scale: 1.015 }}
+                              transition={{ type: 'spring', stiffness: 320, damping: 22 }}
+                              className="group relative min-h-[175px] rounded-2xl bg-gray-950/70 border border-white/5 overflow-hidden p-4 flex flex-col items-center text-center hover:border-yellow-500/30 hover:bg-gray-950/90 transition-colors"
+                            >
+                              <div className="relative z-10 w-full shrink-0">
+                                <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">
+                                  {label}
+                                </p>
+                              </div>
+
+                              <div className="flex-1 w-full min-h-0 flex items-center justify-center py-2">
+                                {image ? (
+                                  <img
+                                    src={image}
+                                    alt={part.name || part.partId}
+                                    className="w-32 h-32 sm:w-36 sm:h-36 object-contain drop-shadow-[0_0_18px_rgba(59,130,246,0.22)] transition-transform duration-300 group-hover:scale-[1.08]"
+                                    loading="lazy"
+                                  />
+                                ) : (
+                                  <div className="w-16 h-16 rounded-full border border-white/5 bg-gray-900/60 flex items-center justify-center text-[9px] font-black text-gray-700">
+                                    NO IMG
+                                  </div>
+                                )}
+                              </div>
+
+                              <div className="relative z-10 w-full shrink-0 pt-1">
+                                <p className="text-[12px] sm:text-[13px] font-black text-white uppercase tracking-tight truncate">
+                                  {part.name || part.partId}
+                                </p>
+                              </div>
+                            </motion.div>
+                          );
+                        })}
+                      </div>
+
+                      {deck.description && (
+                        <p className="text-[10px] text-gray-500 font-medium leading-relaxed mt-4">
+                          {deck.description}
+                        </p>
+                      )}
+                    </motion.div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
         </div>
       </section>
 
