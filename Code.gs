@@ -528,7 +528,11 @@ function doGet(e) {
         case 'getRules': return getRules();
         case 'getRuleById': return getRuleById(e.parameter.ruleId);
         case 'migrateEventsToNewSchema': return migrateEventsToNewSchema();
-        case 'getLeaderboard': return getLeaderboard();
+      case 'getLeaderboard': return getLeaderboard();
+      case 'getActiveDecksByGoogleId': return getMyDecks({
+        googleId: e.parameter.googleId,
+        filter: 'active'
+      });
       case 'getOpenMatches': return getOpenMatches(e.parameter.tournament_url);
       case 'getActiveEvent': return getActiveEvent();
       case 'findTournamentResultSheet': return res(findTournamentResultSheet(e.parameter.eventId));
@@ -1233,16 +1237,9 @@ function getLeaderboard() {
     const finalData = entries.map((entry, index) => {
       const currentRank = index + 1;
       const pInfo = playerMap[entry.googleId] || { nickname: "Unknown Blader", foto: "", slogan: "", catatan: "" };
-      let status = entry.status || 'stay';
-      if (entry.previousRank === null || entry.previousRank === undefined || String(entry.previousRank) === '') {
-        status = 'new';
-      } else if (entry.previousRank > currentRank) {
-        status = 'up';
-      } else if (entry.previousRank < currentRank) {
-        status = 'down';
-      } else {
-        status = 'stay';
-      }
+      const status = ['up', 'down', 'stay', 'new'].includes(String(entry.status || '').toLowerCase())
+        ? String(entry.status).toLowerCase()
+        : 'stay';
 
       return {
         googleId: entry.googleId,
@@ -2331,6 +2328,7 @@ function getBladers() {
         const pointCol = boardHeaderMap['point'];
         const pointFinishCol = boardHeaderMap['point_finish'] !== undefined ? boardHeaderMap['point_finish'] : boardHeaderMap['pointfinish'];
         const prevRankCol = boardHeaderMap['previous_rank'];
+        const statusCol = boardHeaderMap['status'];
 
         const entries = [];
         boardRows.forEach(row => {
@@ -2339,7 +2337,8 @@ function getBladers() {
           const point = pointCol !== undefined ? Number(row[pointCol]) || 0 : 0;
           const pointFinish = pointFinishCol !== undefined ? Number(row[pointFinishCol]) || 0 : 0;
           const previousRank = prevRankCol !== undefined ? (String(row[prevRankCol] || '').trim() ? Number(row[prevRankCol]) : null) : null;
-          entries.push({ googleId: gId, point, pointFinish, previousRank });
+          const status = statusCol !== undefined ? String(row[statusCol] || '').toLowerCase().trim() : '';
+          entries.push({ googleId: gId, point, pointFinish, previousRank, status });
         });
 
         entries.sort((a, b) => {
@@ -2349,14 +2348,9 @@ function getBladers() {
 
         entries.forEach((entry, index) => {
           const currentRank = index + 1;
-          let status = 'stay';
-          if (entry.previousRank === null || entry.previousRank === undefined || String(entry.previousRank) === '') {
-            status = 'new';
-          } else if (entry.previousRank > currentRank) {
-            status = 'up';
-          } else if (entry.previousRank < currentRank) {
-            status = 'down';
-          }
+          const status = ['up', 'down', 'stay', 'new'].includes(entry.status)
+            ? entry.status
+            : 'stay';
           leaderboardMap[entry.googleId] = {
             point: entry.point,
             pointFinish: entry.pointFinish,

@@ -4,6 +4,7 @@ import { motion } from 'framer-motion';
 import { MapPin, Clock8, Users, ExternalLink, ArrowLeft, Trophy, AlertTriangle, BookOpen, Loader2 } from 'lucide-react';
 import UserAvatar from './UserAvatar';
 import PublicNavbar from './PublicNavbar';
+import GoogleSignInButton from './GoogleSignInButton';
 import { AuthContext } from '../context/AuthContext';
 import { getFromGas, postToGas } from '../utils/api';
 import toast from 'react-hot-toast';
@@ -63,7 +64,17 @@ export default function EventDetailPage() {
   const [loading, setLoading] = useState(true);
   const [isAttending, setIsAttending] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
-  const { user } = useContext(AuthContext);
+  const { user, login } = useContext(AuthContext);
+
+  const handleLogin = async (userData) => {
+    try {
+      await login(userData);
+      toast.success('Berhasil masuk. Kamu sekarang bisa check-in.');
+    } catch (error) {
+      console.error('Gagal login dari halaman event:', error);
+      toast.error('Login gagal. Silakan coba lagi.');
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -316,15 +327,11 @@ export default function EventDetailPage() {
                   </span>
                 )}
                 {isLive && !user && (
-                  <motion.button
-                    type="button"
-                    onClick={() => navigate('/')}
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
-                    className="inline-flex items-center gap-2 bg-gradient-to-r from-primary to-blue-500 px-6 py-3 rounded-2xl font-black uppercase italic text-sm shadow-lg shadow-primary/30 transition-all"
-                  >
-                    Sign In to Join
-                  </motion.button>
+                  <GoogleSignInButton
+                    onLogin={handleLogin}
+                    label="Sign In to Join"
+                    className="!bg-gradient-to-r !from-primary !to-blue-500 !border-0 !px-6 !py-3 !h-auto !rounded-2xl !font-black !uppercase !italic !text-sm !text-white !shadow-lg !shadow-primary/30"
+                  />
                 )}
                 {isLive && tournamentStatus !== 'running' && tournamentStatus !== 'finished' && user && !isCheckedIn && (
                   <motion.button

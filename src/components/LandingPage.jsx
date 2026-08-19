@@ -568,7 +568,7 @@ export default function LandingPage({ leaderboard = [], currentEvent = null, isL
                   onClick={() => {
                     const profileId = champion.publicProfileId || champion.public_profile_id;
                     if (profileId) {
-                      window.location.href = `/bladers/${profileId}`;
+                      navigate(`/bladers/${profileId}`);
                     }
                   }}
                   className="px-5 py-2.5 rounded-xl bg-gray-800/60 border border-white/10 text-[10px] font-black uppercase tracking-widest text-gray-300 hover:text-white hover:border-yellow-500/30 transition-all"
@@ -624,7 +624,7 @@ export default function LandingPage({ leaderboard = [], currentEvent = null, isL
                               key={label}
                               whileHover={{ y: -4, scale: 1.015 }}
                               transition={{ type: 'spring', stiffness: 320, damping: 22 }}
-                              className="group relative min-h-[175px] rounded-2xl bg-gray-950/70 border border-white/5 overflow-hidden p-4 flex flex-col items-center text-center hover:border-yellow-500/30 hover:bg-gray-950/90 transition-colors"
+                              className="group relative aspect-square min-h-0 rounded-2xl bg-gray-950/70 border border-white/5 overflow-hidden p-4 flex flex-col items-center text-center hover:border-yellow-500/30 hover:bg-gray-950/90 transition-colors"
                             >
                               <div className="relative z-10 w-full shrink-0">
                                 <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">

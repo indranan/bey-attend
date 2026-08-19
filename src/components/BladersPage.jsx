@@ -3,6 +3,9 @@ import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import {
   Search,
+  ShieldCheck,
+  Sparkles,
+  Trophy,
   Users,
 } from 'lucide-react';
 import PublicNavbar from './PublicNavbar';
@@ -97,7 +100,7 @@ export default function BladersPage() {
       try {
         const res = await getFromGas(
           'getBladers',
-          false,
+          true,
           {},
           {
             maxRetries: 1,
@@ -148,11 +151,13 @@ export default function BladersPage() {
   const filteredBladers = useMemo(() => {
     let list = bladers;
 
-    if (roleFilter !== 'ALL') {
+    if (roleFilter === 'ADMINS') {
       list = list.filter(
-        (b) =>
-          String(b.role || '').toUpperCase() ===
-          roleFilter
+        (b) => String(b.role || '').toUpperCase() === 'ADMIN'
+      );
+    } else if (roleFilter === 'BLADERS') {
+      list = list.filter(
+        (b) => String(b.role || '').toUpperCase() !== 'ADMIN'
       );
     }
 
@@ -208,7 +213,7 @@ export default function BladersPage() {
       <PublicNavbar />
 
       <div className="max-w-6xl mx-auto px-6 pt-20 pb-12">
-        {/* HEADER */}
+        {/* HERO */}
         <motion.div
           initial={{
             opacity: 0,
@@ -218,9 +223,15 @@ export default function BladersPage() {
             opacity: 1,
             y: 0,
           }}
-          className="text-center mb-10"
+          className="relative mb-8 overflow-hidden rounded-[2rem] border border-white/10 bg-gradient-to-br from-blue-600/20 via-gray-900 to-violet-500/10 px-6 py-9 text-center shadow-2xl shadow-black/20"
         >
-          <h1 className="text-3xl md:text-4xl font-black italic uppercase tracking-tighter mb-2">
+          <div className="absolute -top-16 -left-16 h-44 w-44 rounded-full bg-blue-500/20 blur-3xl" />
+          <div className="absolute -bottom-20 -right-10 h-48 w-48 rounded-full bg-violet-500/15 blur-3xl" />
+          <div className="relative">
+            <div className="mx-auto mb-3 flex w-fit items-center gap-2 rounded-full border border-blue-300/20 bg-blue-400/10 px-3 py-1 text-[9px] font-black uppercase tracking-[0.2em] text-blue-200">
+              <Sparkles size={12} /> Blader Directory
+            </div>
+          <h1 className="text-3xl md:text-5xl font-black italic uppercase tracking-tighter mb-2">
             <span className="bg-gradient-to-r from-blue-400 via-cyan-400 to-blue-500 bg-clip-text text-transparent">
               BLADERS
             </span>
@@ -229,6 +240,30 @@ export default function BladersPage() {
           <p className="text-xs font-black text-gray-500 uppercase tracking-[0.2em]">
             Public Blader Directory
           </p>
+            <div className="mt-6 flex flex-wrap items-center justify-center gap-3 text-left">
+              <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-black/20 px-4 py-2.5">
+                <Users size={18} className="text-blue-300" />
+                <div>
+                  <p className="text-[8px] font-black uppercase tracking-widest text-gray-500">Total Blader</p>
+                  <p className="mt-0.5 text-lg font-black italic text-white">{bladers.length}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 rounded-2xl border border-yellow-300/20 bg-yellow-400/10 px-4 py-2.5">
+                <Trophy size={18} className="text-yellow-300" />
+                <div>
+                  <p className="text-[8px] font-black uppercase tracking-widest text-yellow-200/60">Terdaftar rank</p>
+                  <p className="mt-0.5 text-lg font-black italic text-white">{bladers.filter((blader) => blader.rank !== null && blader.rank !== undefined).length}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-2.5">
+                <ShieldCheck size={18} className="text-red-300" />
+                <div>
+                  <p className="text-[8px] font-black uppercase tracking-widest text-red-200/60">Admin</p>
+                  <p className="mt-0.5 text-lg font-black italic text-white">{bladers.filter((blader) => String(blader.role || '').toLowerCase() === 'admin').length}</p>
+                </div>
+              </div>
+            </div>
+          </div>
         </motion.div>
 
         {/* FILTER */}
@@ -359,11 +394,18 @@ export default function BladersPage() {
                   </p>
 
                   {/* RANK */}
-                  <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-1">
-                    {getRankLabel(
-                      blader.rank
+                  <div className="mb-1 flex items-center gap-2">
+                    <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">
+                      {getRankLabel(
+                        blader.rank
+                      )}
+                    </p>
+                    {movementBadge && (
+                      <span className={`text-[9px] font-black uppercase tracking-wider ${movementBadge.color}`}>
+                        {movementBadge.label}
+                      </span>
                     )}
-                  </p>
+                  </div>
 
                   {/* POINT */}
                   <p className="text-sm font-black text-gray-300 mb-4">

@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { MapPin, Clock8, Users, ExternalLink } from 'lucide-react';
+import { CalendarDays, MapPin, Clock8, Users, ExternalLink, Sparkles } from 'lucide-react';
 import PublicNavbar from './PublicNavbar';
 import { useNavigate } from 'react-router-dom';
 import { getFromGas } from '../utils/api';
@@ -55,6 +55,7 @@ const StatusTab = ({ label, active, onClick }) => (
 
 export default function EventsPage({ currentEvent = null, events = [] }) {
   const [activeTab, setActiveTab] = useState('LIVE');
+  const [fetchedEvents, setFetchedEvents] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const navigate = useNavigate();
@@ -68,14 +69,14 @@ export default function EventsPage({ currentEvent = null, events = [] }) {
       try {
         const res = await getFromGas('getEvents');
         if (Array.isArray(res?.events)) {
-          setEvents(res.events);
+          setFetchedEvents(res.events);
         } else {
-          setEvents([]);
+          setFetchedEvents([]);
         }
       } catch (err) {
         console.error('Gagal fetch events:', err);
         setError('Gagal memuat riwayat event.');
-        setEvents([]);
+        setFetchedEvents([]);
       } finally {
         setLoading(false);
       }
@@ -85,14 +86,16 @@ export default function EventsPage({ currentEvent = null, events = [] }) {
     }
   }, [events]);
 
+  const eventList = Array.isArray(events) && events.length > 0 ? events : fetchedEvents;
+
   const currentEventId = useMemo(() => currentEvent?.event_id || currentEvent?.id || '', [currentEvent]);
 
   const normalizedEvents = useMemo(() => {
-    return (Array.isArray(events) ? events : []).map(e => ({
+    return eventList.map(e => ({
       ...e,
       status: String(e.status || '').toLowerCase().trim()
     }));
-  }, [events]);
+  }, [eventList]);
 
   const filteredEvents = useMemo(() => {
     const excludeId = currentEventId;
@@ -179,13 +182,19 @@ export default function EventsPage({ currentEvent = null, events = [] }) {
     <div className="min-h-screen bg-gray-950 text-white">
       <PublicNavbar />
       <div className="max-w-5xl mx-auto px-6 pt-20 pb-12">
-        {/* Header */}
+        {/* Hero */}
         <motion.div
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="text-center mb-10"
+          className="relative mb-8 overflow-hidden rounded-[2rem] border border-white/10 bg-gradient-to-br from-blue-600/20 via-gray-900 to-cyan-400/10 px-6 py-9 text-center shadow-2xl shadow-black/20"
         >
-          <h1 className="text-3xl md:text-4xl font-black italic uppercase tracking-tighter mb-2">
+          <div className="absolute -top-16 -left-16 h-44 w-44 rounded-full bg-blue-500/20 blur-3xl" />
+          <div className="absolute -bottom-20 -right-10 h-48 w-48 rounded-full bg-cyan-400/15 blur-3xl" />
+          <div className="relative">
+            <div className="mx-auto mb-3 flex w-fit items-center gap-2 rounded-full border border-cyan-300/20 bg-cyan-400/10 px-3 py-1 text-[9px] font-black uppercase tracking-[0.2em] text-cyan-200">
+              <Sparkles size={12} /> Battle Calendar
+            </div>
+          <h1 className="text-3xl md:text-5xl font-black italic uppercase tracking-tighter mb-2">
             <span className="bg-gradient-to-r from-blue-400 via-cyan-400 to-blue-500 bg-clip-text text-transparent">
               EVENTS
             </span>
@@ -193,6 +202,23 @@ export default function EventsPage({ currentEvent = null, events = [] }) {
           <p className="text-xs font-black text-gray-500 uppercase tracking-[0.2em]">
             Lalapan Beyblade Tournament
           </p>
+            <div className="mt-6 flex flex-wrap items-center justify-center gap-3 text-left">
+              <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-black/20 px-4 py-2.5">
+                <CalendarDays size={18} className="text-cyan-300" />
+                <div>
+                  <p className="text-[8px] font-black uppercase tracking-widest text-gray-500">Total Event</p>
+                  <p className="mt-0.5 text-lg font-black italic text-white">{normalizedEvents.length + (hasEvent ? 1 : 0)}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 rounded-2xl border border-green-400/20 bg-green-500/10 px-4 py-2.5">
+                <span className="h-2.5 w-2.5 rounded-full bg-green-400 shadow-[0_0_12px_rgba(74,222,128,0.8)]" />
+                <div>
+                  <p className="text-[8px] font-black uppercase tracking-widest text-green-200/60">Sedang berjalan</p>
+                  <p className="mt-0.5 text-lg font-black italic text-white">{hasEvent ? '1 Event' : 'Tidak ada'}</p>
+                </div>
+              </div>
+            </div>
+          </div>
         </motion.div>
 
         {/* Status Tabs */}
