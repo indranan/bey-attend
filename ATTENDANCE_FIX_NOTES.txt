@@ -1,0 +1,7 @@
+Perubahan:
+- postAttendance sekarang mengambil nickname/email/foto resmi dari Players berdasarkan google_id.
+- EventDetailPage tidak lagi mengirim nama Google sebagai nickname attendance.
+- Menambahkan endpoint repairAttendanceNicknames untuk membetulkan data Attendance lama.
+  Bisa dijalankan dari Apps Script editor dengan memilih fungsi repairAttendanceNicknames.
+- Debug console.log/warn/info/debug di source frontend dibersihkan. console.error tetap dipertahankan untuk error nyata.
+- currentPlayer tetap menggunakan cache localStorage melalui AuthContext; cache tidak dihapus.

@@ -555,6 +555,7 @@ function doPost(e) {
       case 'createProfile': return createProfile(data);
       case 'updateNickname': return updateNickname(data);
       case 'attendance': return postAttendance(data);
+      case 'repairAttendanceNicknames': return repairAttendanceNicknames();
       case 'createEvent': return createEvent(data);
       case 'resetArena': return resetArena();
       case 'startEvent': return startEvent(data);
@@ -3679,7 +3680,10 @@ function createProfile(data) {
 
 function postAttendance(data) {
   const eventId = String(data.eventId || '').trim();
+  const googleId = String(data.googleId || '').trim();
+
   if (!eventId) return res({ status: 'error', message: 'eventId wajib diisi' });
+  if (!googleId) return res({ status: 'error', message: 'googleId wajib diisi' });
 
   const eventSheet = SS.getSheetByName("Events");
   if (!eventSheet) return res({ status: 'error', message: 'Sheet Events tidak ditemukan' });
@@ -3718,24 +3722,163 @@ function postAttendance(data) {
   }
 
   const sheet = SS.getSheetByName("Attendance");
-  const values = sheet.getDataRange().getValues();
+  if (!sheet) return res({ status: 'error', message: 'Sheet Attendance tidak ditemukan' });
 
-  const isDuplicate = values.some(row => row[1] == data.eventId && row[2] == data.googleId);
+  const values = sheet.getDataRange().getValues();
+  const isDuplicate = values.some(row =>
+    String(row[1] || '').trim() === eventId &&
+    String(row[2] || '').trim() === googleId
+  );
 
   if (isDuplicate) {
     return res({ status: "exists", message: "Anda sudah absen di event ini!" });
   }
 
+  // Sumber nickname resmi = Players.nickname, bukan user.name dari Google.
+  const playerSheet = SS.getSheetByName("Players");
+  if (!playerSheet) {
+    return res({ status: 'error', message: 'Sheet Players tidak ditemukan' });
+  }
+
+  const playerValues = playerSheet.getDataRange().getDisplayValues();
+  if (playerValues.length < 2) {
+    return res({ status: 'error', message: 'Data pemain belum tersedia' });
+  }
+
+  const playerHeaders = playerValues[0];
+  const playerMap = {};
+  playerHeaders.forEach((h, i) => {
+    playerMap[String(h).toLowerCase().trim()] = i;
+  });
+
+  const googleIdCol = playerMap['google_id'] !== undefined
+    ? playerMap['google_id']
+    : playerMap['googleid'];
+  const nicknameCol = playerMap['nickname'];
+  const emailCol = playerMap['email'];
+  const photoCol = playerMap['photo_url'] !== undefined
+    ? playerMap['photo_url']
+    : (playerMap['foto'] !== undefined ? playerMap['foto'] : playerMap['photo']);
+
+  if (googleIdCol === undefined || nicknameCol === undefined) {
+    return res({
+      status: 'error',
+      message: 'Kolom google_id/nickname di Players tidak ditemukan'
+    });
+  }
+
+  const playerRow = playerValues.slice(1).find(row =>
+    String(row[googleIdCol] || '').trim() === googleId
+  );
+
+  if (!playerRow) {
+    return res({ status: 'error', message: 'Profil pemain tidak ditemukan' });
+  }
+
+  const nickname = String(playerRow[nicknameCol] || '').trim() || 'Blader';
+  const email = emailCol !== undefined
+    ? String(playerRow[emailCol] || '').trim()
+    : String(data.email || '').trim();
+  const foto = photoCol !== undefined
+    ? String(playerRow[photoCol] || '').trim()
+    : String(data.foto || '').trim();
+
   sheet.appendRow([
     new Date(),
-    data.eventId,
-    data.googleId,
-    data.nickname,
-    data.email,
-    data.foto
+    eventId,
+    googleId,
+    nickname,
+    email,
+    foto
   ]);
 
-  return res({ status: "success" });
+  return res({
+    status: "success",
+    nickname,
+    email,
+    foto
+  });
+}
+
+function repairAttendanceNicknames() {
+  const attendanceSheet = SS.getSheetByName('Attendance');
+  const playersSheet = SS.getSheetByName('Players');
+
+  if (!attendanceSheet || !playersSheet) {
+    return res({
+      status: 'error',
+      message: 'Sheet Attendance atau Players tidak ditemukan'
+    });
+  }
+
+  const attendanceValues = attendanceSheet.getDataRange().getValues();
+  const playerValues = playersSheet.getDataRange().getDisplayValues();
+
+  if (attendanceValues.length < 2 || playerValues.length < 2) {
+    return res({
+      status: 'success',
+      updated: 0,
+      skipped: 0,
+      message: 'Tidak ada data yang perlu diperbaiki'
+    });
+  }
+
+  const playerHeaders = playerValues[0];
+  const playerMap = {};
+  playerHeaders.forEach((h, i) => {
+    playerMap[String(h).toLowerCase().trim()] = i;
+  });
+
+  const googleIdCol = playerMap['google_id'] !== undefined
+    ? playerMap['google_id']
+    : playerMap['googleid'];
+  const nicknameCol = playerMap['nickname'];
+
+  if (googleIdCol === undefined || nicknameCol === undefined) {
+    return res({
+      status: 'error',
+      message: 'Kolom google_id/nickname di Players tidak ditemukan'
+    });
+  }
+
+  const nicknameByGoogleId = {};
+  playerValues.slice(1).forEach(row => {
+    const googleId = String(row[googleIdCol] || '').trim();
+    const nickname = String(row[nicknameCol] || '').trim();
+    if (googleId && nickname) {
+      nicknameByGoogleId[googleId] = nickname;
+    }
+  });
+
+  let updated = 0;
+  let skipped = 0;
+
+  for (let i = 1; i < attendanceValues.length; i++) {
+    const googleId = String(attendanceValues[i][2] || '').trim();
+    if (!googleId) {
+      skipped++;
+      continue;
+    }
+
+    const nickname = nicknameByGoogleId[googleId];
+    if (!nickname) {
+      skipped++;
+      continue;
+    }
+
+    const currentName = String(attendanceValues[i][3] || '').trim();
+    if (currentName !== nickname) {
+      attendanceSheet.getRange(i + 1, 4).setValue(nickname);
+      updated++;
+    }
+  }
+
+  return res({
+    status: 'success',
+    updated,
+    skipped,
+    message: `Repair nickname selesai. ${updated} baris diperbarui.`
+  });
 }
 
 function updateNickname(data) {

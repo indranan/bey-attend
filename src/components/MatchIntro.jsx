@@ -79,7 +79,6 @@ export default function MatchIntro({ show, onFinish, audioSrc = '/suara-announce
           const audio = new Audio(audioSrc);
           audio.play().catch(() => {});
         } catch (e) {
-          console.warn('Audio gagal diputar:', e);
         }
         setPhase('READY');
       }, 2500)

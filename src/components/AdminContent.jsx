@@ -89,18 +89,11 @@ const AdminContent = ({ user, onCreateEvent, onGenerateTournament, onUpdatePoint
   ).trim().toLowerCase();
 
   if (!tournamentStatus) {
-    console.warn('[TOURNAMENT STATUS MISSING]', displayEvent);
   }
 
   const normalizedTournamentStatus = tournamentStatus || 'not_started';
 
   useEffect(() => {
-    console.log('[ADMIN EVENT FINAL]', {
-      eventId: displayEvent?.event_id || displayEvent?.id,
-      status: displayEvent?.status,
-      tournament_status: displayEvent?.tournament_status,
-      normalizedTournamentStatus
-    });
   }, [displayEvent?.event_id, displayEvent?.status, displayEvent?.tournament_status, normalizedTournamentStatus]);
 
   const handleSavePoints = async () => {
@@ -192,13 +185,11 @@ const AdminContent = ({ user, onCreateEvent, onGenerateTournament, onUpdatePoint
   }, [syncExcludedPlayers, syncEventId, syncSheetName]);
 
   const handleEditEvent = (formData) => {
-    console.log('[ADMIN MUTATION CLICK]', { action: 'editEvent', eventId: formData?.event_id });
     setShowEditModal(false);
     onEditEvent?.(formData);
   };
 
   const handlePreviewSync = async () => {
-    console.log('[ADMIN MUTATION CLICK]', { action: 'previewLeaderboard', eventId: syncEventId });
     if (!syncEventId) return toast.error('Pilih event terlebih dahulu');
     if (!syncSheetName) return toast.error('Sheet hasil tournament tidak ditemukan');
     setIsPreviewLoading(true);
@@ -215,7 +206,6 @@ const AdminContent = ({ user, onCreateEvent, onGenerateTournament, onUpdatePoint
         sheetName: syncSheetName,
         excludedGoogleIds: Array.from(syncExcludedPlayers)
       });
-      console.log('[ADMIN MUTATION RESPONSE]', { action: 'previewLeaderboard', status: res?.status });
       if (res?.status === 'success') {
         setSyncPreview(res.changes || []);
         setSyncTournamentParticipants(res.tournamentParticipants || []);
@@ -252,7 +242,6 @@ const AdminContent = ({ user, onCreateEvent, onGenerateTournament, onUpdatePoint
   };
 
   const handleApplySync = async () => {
-    console.log('[ADMIN MUTATION CLICK]', { action: 'applyLeaderboard', eventId: syncEventId });
     if (!syncEventId || !syncSheetName) return;
     setIsApplying(true);
     setSyncApplyStatus('processing');
@@ -262,7 +251,6 @@ const AdminContent = ({ user, onCreateEvent, onGenerateTournament, onUpdatePoint
         sheetName: syncSheetName,
         excludedGoogleIds: Array.from(syncExcludedPlayers)
       });
-      console.log('[ADMIN MUTATION RESPONSE]', { action: 'applyLeaderboard', status: res?.status });
       if (res?.status === 'success') {
         setSyncApplyStatus('success');
         toast.success('Leaderboard berhasil diperbarui.');
@@ -311,10 +299,8 @@ const AdminContent = ({ user, onCreateEvent, onGenerateTournament, onUpdatePoint
   };
 
   const handleMigratePublicProfileIds = async () => {
-    console.log('[ADMIN MUTATION CLICK]', { action: 'migratePublicProfileIds' });
     try {
       const res = await migratePublicProfileIds();
-      console.log('[ADMIN MUTATION RESPONSE]', { action: 'migratePublicProfileIds', status: res?.status, updated: res?.updated, skipped: res?.skipped });
       if (res?.status === 'success') {
         toast.success(`Migration selesai. Updated: ${res.updated}, Skipped: ${res.skipped}`);
       } else {
@@ -328,7 +314,6 @@ const AdminContent = ({ user, onCreateEvent, onGenerateTournament, onUpdatePoint
   const canApply = syncPreview && syncPreview.length > 0 && syncWarnings.filter(w => w.message && w.message.toLowerCase().includes('error')).length === 0 && !isApplyLocked;
 
   const handleSaveManageRule = async () => {
-    console.log('[ADMIN MUTATION CLICK]', { action: 'saveManageRule', ruleId: editingRule?.rule_id });
     if (!ruleForm.nama.trim()) return toast.error('Nama rule wajib diisi');
     setIsSavingManageRule(true);
     try {
@@ -336,7 +321,6 @@ const AdminContent = ({ user, onCreateEvent, onGenerateTournament, onUpdatePoint
         rule_id: editingRule?.rule_id || '',
         ...ruleForm
       });
-      console.log('[ADMIN MUTATION RESPONSE]', { action: 'saveManageRule', status: res?.status });
       if (res?.status === 'success') {
         toast.success(editingRule ? 'Rule berhasil diperbarui' : 'Rule berhasil dibuat');
         setEditingRule(null);
@@ -353,10 +337,8 @@ const AdminContent = ({ user, onCreateEvent, onGenerateTournament, onUpdatePoint
   };
 
   const handleArchiveRule = async (ruleId) => {
-    console.log('[ADMIN MUTATION CLICK]', { action: 'archiveRule', ruleId });
     try {
       const res = await saveRule({ rule_id: ruleId, status: 'arsip' });
-      console.log('[ADMIN MUTATION RESPONSE]', { action: 'archiveRule', status: res?.status });
       if (res?.status === 'success') {
         toast.success('Rule diarsipkan');
         onRefreshRules?.();
@@ -369,10 +351,8 @@ const AdminContent = ({ user, onCreateEvent, onGenerateTournament, onUpdatePoint
   };
 
   const handleActivateRule = async (ruleId) => {
-    console.log('[ADMIN MUTATION CLICK]', { action: 'activateRule', ruleId });
     try {
       const res = await saveRule({ rule_id: ruleId, status: 'aktif' });
-      console.log('[ADMIN MUTATION RESPONSE]', { action: 'activateRule', status: res?.status });
       if (res?.status === 'success') {
         toast.success('Rule diaktifkan');
         onRefreshRules?.();
@@ -398,7 +378,6 @@ const AdminContent = ({ user, onCreateEvent, onGenerateTournament, onUpdatePoint
   };
 
   const handleSaveRule = async () => {
-    console.log('[ADMIN MUTATION CLICK]', { action: 'saveRule' });
     setIsSavingRule(true);
     try {
       const res = await saveRule({
@@ -407,7 +386,6 @@ const AdminContent = ({ user, onCreateEvent, onGenerateTournament, onUpdatePoint
         rule_warning: ruleWarning,
         rule_details: ruleDetails
       });
-      console.log('[ADMIN MUTATION RESPONSE]', { action: 'saveRule', status: res?.status });
       if (res?.status === 'success') {
         toast.success('Rule berhasil disimpan!');
       } else {

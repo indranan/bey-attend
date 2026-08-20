@@ -166,14 +166,23 @@ export default function EventDetailPage() {
     try {
       const res = await postToGas('attendance', {
         eventId: event.id,
-        googleId: user.sub,
-        nickname: user.name || 'Blader',
-        email: user.email || '',
-        foto: user.picture || ''
+        googleId: user.sub
       });
       if (res?.status === 'success') {
         toast?.success?.('Ready to Battle!');
-        setEventDetail(prev => prev ? { ...prev, count: (prev.count || 0) + 1, participants: [...(prev.participants || []), { googleId: user.sub, nama: user.name || 'Blader', email: user.email || '', foto: user.picture || '' }] } : prev);
+        setEventDetail(prev => prev ? {
+          ...prev,
+          count: (prev.count || 0) + 1,
+          participants: [
+            ...(prev.participants || []),
+            {
+              googleId: user.sub,
+              nama: res.nickname || 'Blader',
+              email: res.email || '',
+              foto: res.foto || ''
+            }
+          ]
+        } : prev);
       } else {
         toast?.error?.(res?.message || 'Gagal mengirim absensi');
       }

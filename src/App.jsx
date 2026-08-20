@@ -130,13 +130,10 @@ export default function App() {
   const refreshEvent = async () => {
     try {
       const res = await getFromGas('getEvent');
-      console.log('[EVENT API DATA]', res);
       if (res && res.status === 'timeout') {
-        console.warn('[API STALE DATA]', { path: 'getEvent', usingPreviousData: true });
         return { status: 'timeout', message: res.message, data: data };
       }
       if (res && res.status === 'error') {
-        console.warn('[API STALE DATA]', { path: 'getEvent', usingPreviousData: true });
         return { status: 'error', message: res.message, data: data };
       }
       if (res) {
@@ -152,13 +149,10 @@ export default function App() {
   const refreshEvents = async () => {
     try {
       const res = await getFromGas('getEvents');
-      console.log('[REFRESH EVENTS]', res);
       if (res && res.status === 'timeout') {
-        console.warn('[API STALE DATA]', { path: 'getEvents', usingPreviousData: true });
         return { status: 'timeout', message: res.message, data: events };
       }
       if (res && res.status === 'error') {
-        console.warn('[API STALE DATA]', { path: 'getEvents', usingPreviousData: true });
         return { status: 'error', message: res.message, data: events };
       }
       if (Array.isArray(res?.events)) {
@@ -177,11 +171,9 @@ export default function App() {
     try {
       const res = await getFromGas('getLeaderboard', true);
       if (res && res.status === 'timeout') {
-        console.warn('[API STALE DATA]', { path: 'getLeaderboard', usingPreviousData: true });
         return { status: 'timeout', message: res.message, data: leaderboard };
       }
       if (res && res.status === 'error') {
-        console.warn('[API STALE DATA]', { path: 'getLeaderboard', usingPreviousData: true });
         return { status: 'error', message: res.message, data: leaderboard };
       }
       if (res && Array.isArray(res)) setLeaderboard(res);
@@ -196,11 +188,9 @@ export default function App() {
     try {
       const res = await getFromGas('getRules');
       if (res && res.status === 'timeout') {
-        console.warn('[API STALE DATA]', { path: 'getRules', usingPreviousData: true });
         return { status: 'timeout', message: res.message, data: rules };
       }
       if (res && res.status === 'error') {
-        console.warn('[API STALE DATA]', { path: 'getRules', usingPreviousData: true });
         return { status: 'error', message: res.message, data: rules };
       }
       if (Array.isArray(res)) setRules(res);
@@ -215,14 +205,12 @@ export default function App() {
     try {
       const googleId = user?.sub;
       const email = user?.email;
-      console.log('[CURRENT PLAYER LOAD]');
       const res = await getFromGas('getBlader', true, {
         googleId,
         email
       });
 
       if (res && (res.status === 'timeout' || res.status === 'error')) {
-        console.warn('[API STALE DATA]', { path: 'getBlader', usingPreviousData: true });
         return { status: res.status, message: res.message, data: blader };
       }
 
@@ -266,7 +254,6 @@ export default function App() {
           new Promise((_, reject) => setTimeout(() => reject(new Error(`Timeout: ${label} (> ${timeoutMs}ms)`)), timeoutMs))
         ]);
         if (attempt > 0) {
-          console.log(`[API RETRY]`, { path: label, attempt, status: 'success' });
         }
         return { status: 'success', data: result };
       } catch (err) {
@@ -274,12 +261,6 @@ export default function App() {
         const isNetwork = err?.code === 'ERR_NETWORK' || err?.message?.includes('Network Error');
         const retryable = isTimeout || isNetwork;
         
-        console.warn(`[API TIMEOUT]`, { 
-          path: label, 
-          attempt, 
-          type: isTimeout ? 'TIMEOUT' : isNetwork ? 'NETWORK_ERROR' : 'APPLICATION_ERROR',
-          retryable 
-        });
         
         if (!retryable || attempt === maxRetries) {
           return { 
@@ -303,18 +284,14 @@ export default function App() {
     
     try {
       const routePlan = getRouteDataPlan(pathname);
-      console.log('[ROUTE DATA PLAN]', { route: pathname, required: routePlan });
       
       const fetchPromises = [];
       const fetchLabels = [];
 
       // CRITICAL: currentPlayer from cache - don't wait for API
       if (routePlan.includes('currentPlayer')) {
-        console.log('[API REQUEST START]', { path: 'currentPlayer', route: pathname, source: 'cache' });
         if (currentPlayer) {
-          console.log('[CURRENT PLAYER CACHE HIT]', currentPlayer);
         } else {
-          console.log('[CURRENT PLAYER CACHE MISS]', { route: pathname });
         }
       }
 
@@ -391,14 +368,10 @@ export default function App() {
             if (result.status === 'fulfilled') {
               const status = result.value.status;
               if (status === 'success') {
-                console.log('[BACKGROUND RETRY SUCCESS]', { path: label, status });
               } else if (status === 'timeout') {
-                console.warn('[BACKGROUND RETRY TIMEOUT]', { path: label, status });
               } else {
-                console.warn('[BACKGROUND RETRY ERROR]', { path: label, status });
               }
             } else {
-              console.warn('[BACKGROUND RETRY ERROR]', { path: label, error: result.reason?.message });
             }
           });
         });
@@ -417,7 +390,6 @@ export default function App() {
   };
 
   const retrySpecific = async (label) => {
-    console.log(`[RETRY SPECIFIC]`, { label });
     let result;
     switch (label) {
       case 'profile':
@@ -545,15 +517,12 @@ export default function App() {
   };
 
   const handleSubmitEvent = async (formData) => {
-    console.log('[ADMIN MUTATION API]', { action: 'createEvent', nama: formData?.nama });
     if (!formData.nama || !formData.lokasi) return toast.error('Isi semua data!');
     setIsSubmitting(true);
     const res = await postToGas('createEvent', formData);
-    console.log('[ADMIN MUTATION RESPONSE]', { action: 'createEvent', status: res?.status });
     if (res?.status === 'success') {
       toast.success('Event Baru Aktif!');
       setShowEventModal(false);
-      console.log('[ADMIN MUTATION REFRESH]', { action: 'createEvent' });
       await Promise.all([refreshEvent(), refreshEvents()]);
     } else {
       toast.error(res?.message || 'Gagal terhubung ke server');
@@ -563,7 +532,6 @@ export default function App() {
 
   const handleGenerateTournament = async (opts = {}) => {
     const { format = 'weekly', swissRounds } = opts;
-    console.log('[ADMIN MUTATION CLICK]', { action: 'generateTournament', format, swissRounds, eventId: data?.event?.id });
     if (!data?.event?.id) return toast.error('Tidak ada event aktif!');
     setIsGenerating(true);
     try {
@@ -575,10 +543,8 @@ export default function App() {
         swiss_rounds: format === 'weekly' ? Number(swissRounds) || 3 : undefined
       });
       toast.dismiss(loadingToast);
-      console.log('[ADMIN MUTATION RESPONSE]', { action: 'generateTournament', status: createRes?.status });
       if (createRes?.status === 'success') {
         toast.success(format === 'weekly' ? 'Turnamen Weekly Dimulai!' : 'Turnamen Final Dimulai!');
-        console.log('[ADMIN MUTATION REFRESH]', { action: 'generateTournament' });
         refreshEvent();
         refreshEvents();
       } else if (createRes?.status === 'timeout') {
@@ -685,15 +651,12 @@ export default function App() {
   };
 
   const handleEditEvent = async (formData) => {
-    console.log('[ADMIN MUTATION API]', { action: 'editEvent', eventId: formData?.event_id });
     setIsEditingEvent(true);
     try {
       const res = await updateEvent(formData);
-      console.log('[ADMIN MUTATION RESPONSE]', { action: 'editEvent', status: res?.status });
       if (res?.status === 'success') {
         toast.success('Event berhasil diperbarui');
         setShowEditModal(false);
-        console.log('[ADMIN MUTATION REFRESH]', { action: 'editEvent' });
         await Promise.all([refreshEvent(), refreshEvents()]);
       } else {
         toast.error(res?.message || 'Gagal mengedit event');
@@ -707,9 +670,6 @@ export default function App() {
 
   const openStartConfirm = (eventId) => {
     const targetEventId = eventId || data?.event?.id;
-    console.log('[START EVENT CLICK]', {
-      eventId: targetEventId
-    });
     setConfirmModalData({
       title: 'Mulai event sekarang?',
       message: 'Event akan diubah dari UPCOMING menjadi LIVE. Pastikan peserta sudah siap.',
@@ -722,7 +682,6 @@ export default function App() {
           throw new Error('Event tidak ditemukan');
         }
         const res = await startEvent(targetEventId);
-        console.log('[START EVENT API RESPONSE]', res);
         if (res?.status === 'success') {
           toast.success('Event berhasil dimulai.');
           await Promise.all([refreshEvent(), refreshEvents()]);
@@ -737,7 +696,6 @@ export default function App() {
 
   const openEndConfirm = (eventId) => {
     const targetEventId = eventId || data?.event?.id;
-    console.log('[ADMIN MUTATION CLICK]', { action: 'endEvent', eventId: targetEventId });
     setConfirmModalData({
       title: 'Akhiri event ini?',
       message: 'Event akan diubah dari LIVE menjadi COMPLETED. Pastikan tournament sudah selesai.',
@@ -750,10 +708,8 @@ export default function App() {
           throw new Error('Event tidak ditemukan');
         }
         const res = await endEvent(targetEventId);
-        console.log('[ADMIN MUTATION RESPONSE]', { action: 'endEvent', status: res?.status });
         if (res?.status === 'success') {
           toast.success('Event berhasil diselesaikan.');
-          console.log('[ADMIN MUTATION REFRESH]', { action: 'endEvent' });
           await Promise.all([refreshEvent(), refreshEvents()]);
         } else {
           toast.error(res?.message || 'Gagal mengakhiri event');
@@ -778,7 +734,6 @@ export default function App() {
           throw new Error('Event tidak ditemukan');
         }
         const res = await startTournamentStatus(targetEventId);
-        console.log('[START TOURNAMENT RESPONSE]', res);
         if (res?.status === 'success') {
           toast.success('Tournament berhasil dimulai.');
           await Promise.all([refreshEvent(), refreshEvents()]);
@@ -794,7 +749,6 @@ export default function App() {
 
   const openFinishTournamentConfirm = (eventId) => {
     const targetEventId = eventId || data?.event?.id;
-    console.log('[ADMIN MUTATION CLICK]', { action: 'finishTournament', eventId: targetEventId });
     setConfirmModalData({
       title: 'Finish tournament?',
       message: 'Status tournament akan berubah menjadi FINISHED. Rekap hasil belum dilakukan.',
@@ -809,10 +763,8 @@ export default function App() {
           throw new Error('Event tidak ditemukan');
         }
         const res = await postToGasLongRunning('finishTournament', { eventId: targetEventId });
-        console.log('[ADMIN MUTATION RESPONSE]', { action: 'finishTournament', status: res?.status });
         if (res?.status === 'success') {
           toast.success('TOURNAMENT FINISHED');
-          console.log('[ADMIN MUTATION REFRESH]', { action: 'finishTournament' });
           await Promise.all([refreshEvent(), refreshEvents()]);
         } else if (res?.status === 'timeout') {
           toast.error(res?.message || 'Proses mungkin masih berlangsung. Jangan tekan lagi.');

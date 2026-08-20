@@ -16,8 +16,6 @@ const fadeUp = {
 };
 
 const ProfileContent = ({ blader, user, settings = {}, leaderboard = [], onUpdateNickname, onUpdateBio, onUploadPhoto, isSubmitting }) => {
-  console.log('[PROFILE ROUTE COMPONENT]', 'ProfileContent');
-  console.log('[PROFILE NAVBAR]', { rendered: true });
   const [isEditingNick, setIsEditingNick] = useState(false);
   const [isEditingBio, setIsEditingBio] = useState(false);
   const [editNick, setEditNick] = useState(blader?.nickname || '');

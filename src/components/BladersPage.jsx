@@ -431,16 +431,6 @@ export default function BladersPage() {
                         const targetPath =
                           `/bladers/${profileId}`;
 
-                        console.log(
-                          '[BLADER PROFILE LINK]',
-                          {
-                            nickname:
-                              blader.nickname,
-                            publicProfileId:
-                              profileId,
-                            targetPath,
-                          }
-                        );
 
                         navigate(
                           targetPath

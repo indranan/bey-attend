@@ -888,19 +888,9 @@ export default function MyDecks({ user }) {
                 const comboName = getDeckComboName(deck);
                 const legacyParts = deckParts.filter(isLegacyPartId);
                 if (legacyParts.length) {
-                  console.log('[LEGACY PART ID]', { deckId: deck.deckId, parts: legacyParts.map(p => ({ partId: p.partId, name: p.name })) });
                 }
                 const isProcessing = processingDeckId === deck.deckId;
 
-                console.log('[DECK IMAGE DATA]', {
-                  deckId: deck.deckId,
-                  parts: deckParts.map(part => ({
-                    partId: part.partId,
-                    name: part.name,
-                    partType: part.partType,
-                    imageUrl: part.imageUrl
-                  }))
-                });
 
                 const visualParts = deckParts ? [...deckParts] : [];
                 const bladeIndex = visualParts.findIndex(p => (p.partType || '').toUpperCase() === 'BLADE');

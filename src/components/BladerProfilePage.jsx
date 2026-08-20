@@ -36,19 +36,13 @@ export default function BladerProfilePage() {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  console.log('[BLADER PROFILE ROUTE COMPONENT]', 'BladerProfilePage');
-  console.log('[BLADER PROFILE NAVBAR]', { rendered: true });
 
-  console.log('[BLADER PROFILE PARAM]', {
-    profileId
-  });
 
   useEffect(() => {
     const fetchProfile = async () => {
       setLoading(true);
       try {
         const res = await getBladerProfile(profileId);
-        console.log('[BLADER PROFILE API RESPONSE]', res);
         if (res?.status === 'success') {
           setProfile(res);
         } else {

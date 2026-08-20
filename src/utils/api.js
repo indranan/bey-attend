@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const GAS_URL = "https://script.google.com/macros/s/AKfycbwO7to37cgzO9CwD1UR_4ELRBPEweZ86vNDLwGk1OaMnR9PvQKzW__lFcRYf-Jee4IzyQ/exec";
+const GAS_URL = "https://script.google.com/macros/s/AKfycbwI3Q444pGPPPVY4uiatx4SzHJ2Y9BSJF01GkuQ45FKlPppE6rlgYaz6vMxAwyptWe4/exec";
 
 const AXIOS_TIMEOUT = 15000;
 const LONG_RUNNING_TIMEOUT = 120000;
@@ -95,10 +95,6 @@ export const withRetry = async (
       const result = await fn();
 
       if (attempt > 0) {
-        console.log('[API RETRY SUCCESS]', {
-          path,
-          attempt,
-        });
       }
 
       return result;
@@ -107,11 +103,6 @@ export const withRetry = async (
 
       const errorInfo = classifyError(err, path);
 
-      console.warn('[API REQUEST FAILED]', {
-        path,
-        attempt,
-        ...errorInfo,
-      });
 
       if (!errorInfo.retryable || attempt === maxRetries) {
         throw err;
@@ -319,10 +310,6 @@ export const getOpenMatches = (
       };
     })
     .catch((err) => {
-      console.warn(
-        `GAS ${path} request failed:`,
-        err?.message || err
-      );
 
       return {
         data: null,
