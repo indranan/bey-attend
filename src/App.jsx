@@ -1028,6 +1028,7 @@ export default function App() {
               ) : activeTab === 'admin' ? (
                 <AdminContent
                   key="admin"
+                  user={user}
                   onCreateEvent={() => setShowEventModal(true)}
                   onGenerateTournament={handleGenerateTournament}
                   onUpdatePoints={handleUpdatePoints}
@@ -1229,6 +1230,7 @@ export default function App() {
             String(blader?.role || '').toLowerCase() === 'admin' ? (
               <AdminContent
                 key="admin"
+                user={user}
                 onCreateEvent={() => setShowEventModal(true)}
                 onGenerateTournament={handleGenerateTournament}
                 onUpdatePoints={handleUpdatePoints}

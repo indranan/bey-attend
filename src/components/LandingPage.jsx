@@ -3,7 +3,7 @@ import { motion, useInView } from 'framer-motion';
 import { Trophy, MapPin, Clock8, Users, ChevronDown, Crown, Medal, Star } from 'lucide-react';
 import UserAvatar from './UserAvatar';
 import PublicNavbar from './PublicNavbar';
-import { getActiveDecksByGoogleId } from '../utils/api';
+import { getActiveDecksByGoogleId, getBeybladeParts } from '../utils/api';
 import logoLalapan from '../assets/icon.png';
 import { useNavigate } from 'react-router-dom';
 
@@ -14,6 +14,10 @@ const PART_IMAGE_GLOB_LOWERCASE = Object.fromEntries(
 
 const PART_TYPE_TO_FOLDER = {
   'BLADE': 'blade',
+  'METAL BLADE': 'blade',
+  'MAIN BLADE': 'blade',
+  'OVER_BLADE': 'over-blade',
+  'OVER BLADE': 'over-blade',
   'ASSIST': 'assist-blade',
   'ASSIST_BLADE': 'assist-blade',
   'ASSIST BLADE': 'assist-blade',
@@ -23,41 +27,117 @@ const PART_TYPE_TO_FOLDER = {
   'BIT': 'bit'
 };
 
-const getPartImage = (part, label) => {
-  if (!part) return '';
-  const partId = String(part.partId || '').trim();
-  if (!partId) return '';
+const getPartImage = (part) => {
+  if (!part || !part.partId) return '';
 
-  const normalizedLabel = String(label || '').trim().toUpperCase();
-  const folder = PART_TYPE_TO_FOLDER[normalizedLabel];
+  const normalizedType = String(part.partType || '')
+    .trim()
+    .toUpperCase();
+
+  const folder = PART_TYPE_TO_FOLDER[normalizedType];
   if (!folder) return '';
 
-  const key = `../assets/beyblade/${folder}/${partId}.png`.toLowerCase();
-  return PART_IMAGE_GLOB_LOWERCASE[key] || '';
-};
+  const partIdKey = `../assets/beyblade/${folder}/${part.partId}.png`;
+  const partIdLower = partIdKey.toLowerCase();
 
+  if (PART_IMAGE_GLOB_LOWERCASE[partIdLower]) {
+    return PART_IMAGE_GLOB_LOWERCASE[partIdLower];
+  }
+
+  if (part.name) {
+    const nameKey = `../assets/beyblade/${folder}/${String(part.name).trim()}.png`;
+    const nameLower = nameKey.toLowerCase();
+
+    if (PART_IMAGE_GLOB_LOWERCASE[nameLower]) {
+      return PART_IMAGE_GLOB_LOWERCASE[nameLower];
+    }
+  }
+
+  return '';
+};
 
 const getChampionComboName = (deck) => {
   if (!deck) return '';
 
-  const system = String(deck.system || '').toUpperCase();
-  const getName = (part) => part?.name || '';
-
-  if (system === 'CX') {
-    return [
-      getName(deck.lockChip),
-      getName(deck.blade),
-      getName(deck.assistBlade),
-      getName(deck.ratchet),
-      getName(deck.bit)
-    ].filter(Boolean).join(' ');
-  }
+  const getName = (part) => part?.name || part?.partId || '';
 
   return [
+    getName(deck.lockChip),
     getName(deck.blade),
+    getName(deck.overBlade),
+    getName(deck.assistBlade),
     getName(deck.ratchet),
     getName(deck.bit)
   ].filter(Boolean).join(' ');
+};
+
+const normalizePartType = (type) => {
+  const value = String(type || '').trim().toUpperCase();
+
+  const aliases = {
+    'MAIN BLADE': 'BLADE',
+    'METAL BLADE': 'BLADE',
+    'ASSIST': 'ASSIST_BLADE',
+    'ASSIST BLADE': 'ASSIST_BLADE',
+    'LOCK CHIP': 'LOCK_CHIP',
+    'OVER BLADE': 'OVER_BLADE',
+  };
+
+  return aliases[value] || value;
+};
+
+const hydrateChampionPart = (part, partsMap) => {
+  if (!part?.partId) return null;
+
+  const partId = String(part.partId).trim();
+  const dbPart =
+    partsMap[partId] ||
+    partsMap[partId.toUpperCase()] ||
+    partsMap[partId.toLowerCase()];
+
+  if (dbPart) {
+    return {
+      ...dbPart,
+      ...part,
+      // Data inventory adalah source of truth untuk name/type.
+      name: dbPart.name || part.name || partId,
+      partType: dbPart.partType || part.partType || '',
+      isActive: dbPart.isActive ?? part.isActive,
+    };
+  }
+
+  // Fallback agar asset tetap bisa dicari untuk data lama yang
+  // hanya membawa part_id.
+  const prefix = partId.substring(0, 2).toUpperCase();
+  const inferredType = {
+    BL: 'BLADE',
+    OB: 'OVER_BLADE',
+    AB: 'ASSIST_BLADE',
+    LC: 'LOCK_CHIP',
+    RT: 'RATCHET',
+    BT: 'BIT',
+  }[prefix];
+
+  return {
+    ...part,
+    partId,
+    partType: normalizePartType(part.partType || inferredType),
+    name: part.name || partId,
+  };
+};
+
+const hydrateChampionDeck = (deck, partsMap) => {
+  if (!deck) return deck;
+
+  return {
+    ...deck,
+    lockChip: hydrateChampionPart(deck.lockChip, partsMap),
+    blade: hydrateChampionPart(deck.blade, partsMap),
+    overBlade: hydrateChampionPart(deck.overBlade, partsMap),
+    assistBlade: hydrateChampionPart(deck.assistBlade, partsMap),
+    ratchet: hydrateChampionPart(deck.ratchet, partsMap),
+    bit: hydrateChampionPart(deck.bit, partsMap),
+  };
 };
 
 const fadeUp = {
@@ -142,9 +222,31 @@ export default function LandingPage({ leaderboard = [], currentEvent = null, isL
 
       setChampionDeckLoading(true);
       try {
-        const response = await getActiveDecksByGoogleId(googleId);
+        const [response, partsResponse] = await Promise.all([
+          getActiveDecksByGoogleId(googleId),
+          getBeybladeParts(),
+        ]);
+
         if (cancelled) return;
-        setChampionDecks(Array.isArray(response?.decks) ? response.decks : []);
+
+        const partsList = Array.isArray(partsResponse?.parts)
+          ? partsResponse.parts
+          : [];
+
+        const partsMap = {};
+        partsList.forEach((part) => {
+          if (!part?.partId) return;
+          const id = String(part.partId).trim();
+          partsMap[id] = part;
+          partsMap[id.toUpperCase()] = part;
+          partsMap[id.toLowerCase()] = part;
+        });
+
+        const decks = Array.isArray(response?.decks)
+          ? response.decks.map((deck) => hydrateChampionDeck(deck, partsMap))
+          : [];
+
+        setChampionDecks(decks);
       } catch (error) {
         if (cancelled) return;
         console.error('Gagal memuat deck juara:', error);
@@ -612,13 +714,14 @@ export default function LandingPage({ leaderboard = [], currentEvent = null, isL
 
                       <div className="grid grid-cols-2 gap-3">
                         {[
-                          ['Blade', deck.blade],
-                          ['Assist', deck.assistBlade],
                           ['Lock Chip', deck.lockChip],
+                          ['Blade', deck.blade],
+                          ['Over Blade', deck.overBlade],
+                          ['Assist Blade', deck.assistBlade],
                           ['Ratchet', deck.ratchet],
                           ['Bit', deck.bit]
                         ].filter(([, part]) => part).map(([label, part]) => {
-                          const image = getPartImage(part, label);
+                          const image = getPartImage(part);
                           return (
                             <motion.div
                               key={label}

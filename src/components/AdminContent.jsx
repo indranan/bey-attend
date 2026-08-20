@@ -6,8 +6,9 @@ import { getFromGas, saveRule, previewTournamentResultsToLeaderboard, applyTourn
 import EditEventModal from './EditEventModal';
 import ConfirmModal from './ConfirmModal';
 import PublicNavbar from './PublicNavbar';
+import AdminPartsManager from './AdminPartsManager';
 
-const AdminContent = ({ onCreateEvent, onGenerateTournament, onUpdatePoints, onToggleNickname, nicknameAllowed, leaderboard, isSubmitting, isGenerating, isUpdatingPoints, eventId, currentEvent, events = [], rules = [], onRefreshRules, onRefreshEvent, onStartEvent, onEndEvent, onFinishTournament, onEditEvent }) => {
+const AdminContent = ({ user, onCreateEvent, onGenerateTournament, onUpdatePoints, onToggleNickname, nicknameAllowed, leaderboard, isSubmitting, isGenerating, isUpdatingPoints, eventId, currentEvent, events = [], rules = [], onRefreshRules, onRefreshEvent, onStartEvent, onEndEvent, onFinishTournament, onEditEvent }) => {
   const [format, setFormat] = useState('weekly');
   const [newSwissRounds, setNewSwissRounds] = useState(3);
   const [selectedId, setSelectedId] = useState('');
@@ -1301,6 +1302,8 @@ const AdminContent = ({ onCreateEvent, onGenerateTournament, onUpdatePoints, onT
           )}
         </motion.section>
       </div>
+
+      <AdminPartsManager user={user} />
 
       {/* UTILITIES */}
       <motion.section

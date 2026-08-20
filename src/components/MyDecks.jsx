@@ -4,41 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Plus, Edit3, Trash2, X, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getBeybladeParts, getMyDecks, createDeck, updateDeck, toggleDeckActive, deleteDeck, fixLegacyDeckRow } from '../utils/api';
-
-const PART_IMAGE_GLOB = import.meta.glob('../assets/beyblade/**/*.png', { eager: true, query: '?url', import: 'default' });
-
-const PART_TYPE_TO_FOLDER = {
-  'LOCK_CHIP': 'lock-chip',
-  'LOCK CHIP': 'lock-chip',
-  'BLADE': 'blade',
-  'ASSIST_BLADE': 'assist-blade',
-  'ASSIST BLADE': 'assist-blade',
-  'RATCHET': 'ratchet',
-  'BIT': 'bit'
-};
-
-const PART_IMAGE_GLOB_LOWERCASE = Object.fromEntries(
-  Object.entries(PART_IMAGE_GLOB).map(([key, url]) => [key.toLowerCase(), url])
-);
-
-const getPartImage = (part) => {
-  if (!part || !part.partId) return '';
-
-  const folder = PART_TYPE_TO_FOLDER[part.partType];
-  if (!folder) return '';
-
-  const partIdKey = `../assets/beyblade/${folder}/${part.partId}.png`;
-  const partIdLower = partIdKey.toLowerCase();
-  if (PART_IMAGE_GLOB_LOWERCASE[partIdLower]) return PART_IMAGE_GLOB_LOWERCASE[partIdLower];
-
-  if (part.name) {
-    const nameKey = `../assets/beyblade/${folder}/${part.name.toLowerCase()}.png`;
-    const nameLower = nameKey.toLowerCase();
-    if (PART_IMAGE_GLOB_LOWERCASE[nameLower]) return PART_IMAGE_GLOB_LOWERCASE[nameLower];
-  }
-
-  return '';
-};
+import { getPartImage, getComboName as getComboNameShared, normalizePartType, getBladeRules } from '../utils/deckUtils';
 
 const isLegacyPartId = (part) => {
   if (!part?.partId) return false;
@@ -128,6 +94,7 @@ const emptyDeckForm = {
   system: 'BX',
   lockChip: '',
   blade: '',
+  overBlade: '',
   assistBlade: '',
   ratchet: '',
   bit: '',
@@ -137,7 +104,7 @@ const emptyDeckForm = {
 
 const PartSlot = ({ label, partId, onClick, partsMap, gridClass = '' }) => {
   const part = partsMap[partId];
-  const scaleClasses = getPartImageScale(part?.partType);
+  const scaleClasses = getPartImageScale(normalizePartType(part?.partType));
 
   return (
     <div
@@ -288,14 +255,18 @@ export default function MyDecks({ user }) {
     setEditingDeck(deck);
     setIsEditingDeckId(deck.deckId);
     setIsAddingNew(false);
+    const editBlade = deck.blade?.partId ? parts.find(p => p.partId === deck.blade.partId) : null;
+    const editRules = getBladeRules(editBlade || deck.blade);
+    const editSystem = deck.system || 'BX';
     const initial = {
       deckName: deck.deckName || '',
-      system: deck.system || 'BX',
-      lockChip: deck.lockChip?.partId || '',
+      system: editSystem,
+      lockChip: editSystem === 'CX' ? (deck.lockChip?.partId || '') : '',
       blade: deck.blade?.partId || '',
-      assistBlade: deck.assistBlade?.partId || '',
-      ratchet: deck.ratchet?.partId || '',
-      bit: deck.bit?.partId || '',
+      overBlade: editSystem === 'CX' && editRules.hasOverBlade ? (deck.overBlade?.partId || '') : '',
+      assistBlade: editSystem === 'CX' ? (deck.assistBlade?.partId || '') : '',
+      ratchet: editRules.integratedRatchet || editRules.integratedRatchetBit ? '' : (deck.ratchet?.partId || ''),
+      bit: editRules.integratedRatchetBit ? '' : (deck.bit?.partId || ''),
       description: deck.description || '',
       isActive: deck.isActive ? 'TRUE' : 'FALSE'
     };
@@ -324,38 +295,59 @@ export default function MyDecks({ user }) {
     setForm(prev => ({
       ...prev,
       system: newSystem,
-      lockChip: newSystem === 'BX' || newSystem === 'UX' ? '' : prev.lockChip,
-      assistBlade: newSystem === 'BX' || newSystem === 'UX' ? '' : prev.assistBlade
+      lockChip: newSystem === 'CX' ? prev.lockChip : '',
+      overBlade: newSystem === 'CX' ? prev.overBlade : '',
+      assistBlade: newSystem === 'CX' ? prev.assistBlade : '',
     }));
   };
 
-  const getComboName = () => {
-    const { system, lockChip, blade, assistBlade, ratchet, bit } = form;
-    if (system === 'CX') {
-      const lc = partsMap[lockChip]?.name || '';
-      const bl = partsMap[blade]?.name || '';
-      const ab = partsMap[assistBlade]?.name || '';
-      const rt = partsMap[ratchet]?.name || '';
-      const bt = partsMap[bit]?.name || '';
-      return [lc, bl, ab, rt, bt].filter(Boolean).join(' ');
-    }
-    const bl = partsMap[blade]?.name || '';
-    const rt = partsMap[ratchet]?.name || '';
-    const bt = partsMap[bit]?.name || '';
-    return [bl, rt, bt].filter(Boolean).join(' ');
-  };
+  const getComboName = () => getComboNameShared({
+    system: form.system,
+    lockChip: partsMap[form.lockChip],
+    blade: partsMap[form.blade],
+    overBlade: partsMap[form.overBlade],
+    assistBlade: partsMap[form.assistBlade],
+    ratchet: partsMap[form.ratchet],
+    bit: partsMap[form.bit],
+  });
+
+  const selectedBlade = form.blade ? partsMap[form.blade] : null;
+  const selectedBit = form.bit ? partsMap[form.bit] : null;
+
+  const bladeRules = getBladeRules(selectedBlade);
+  const bitRules = getBladeRules(selectedBit);
+
+  const needsOverBlade =
+    form.system === 'CX' && bladeRules.hasOverBlade;
+
+  // Ratchet wajib disembunyikan bila:
+  // 1) Blade sudah punya Ratchet bawaan, atau
+  // 2) Blade sudah punya Ratchet + Bit bawaan, atau
+  // 3) Bit yang dipilih sendiri sudah membawa Ratchet.
+  const needsRatchet =
+    !bladeRules.integratedRatchet &&
+    !bladeRules.integratedRatchetBit &&
+    !bitRules.integratedRatchet &&
+    !bitRules.integratedRatchetBit;
+
+  // Bit tetap dipilih kecuali Blade sendiri sudah include Ratchet + Bit.
+  const needsBit = !bladeRules.integratedRatchetBit;
 
   const renderEquipmentSlots = () => {
     const fieldOrder = [
-      { key: 'blade', label: 'Blade', type: 'BLADE' },
       { key: 'lockChip', label: 'Lock Chip', type: 'LOCK_CHIP' },
-      { key: 'assistBlade', label: 'Assist', type: 'ASSIST_BLADE' },
+      { key: 'blade', label: 'Blade', type: 'BLADE' },
+      { key: 'overBlade', label: 'Over Blade', type: 'OVER_BLADE' },
+      { key: 'assistBlade', label: 'Assist Blade', type: 'ASSIST_BLADE' },
       { key: 'ratchet', label: 'Ratchet', type: 'RATCHET' },
       { key: 'bit', label: 'Bit', type: 'BIT' }
     ];
 
     const availableFields = fieldOrder.filter(f => {
       if (f.type === 'LOCK_CHIP' || f.type === 'ASSIST_BLADE') return form.system === 'CX';
+      if (f.type === 'OVER_BLADE') return needsOverBlade;
+      if (f.type === 'RATCHET') return needsRatchet;
+      if (f.type === 'BIT') return needsBit;
       return true;
     });
 
@@ -393,18 +385,42 @@ export default function MyDecks({ user }) {
   };
 
   const validateForm = () => {
-    const { deckName, system, lockChip, blade, assistBlade, ratchet, bit } = form;
+    const { deckName, system, lockChip, blade, overBlade, assistBlade, ratchet, bit } = form;
     if (!deckName.trim()) return 'Deck name wajib diisi';
     if (!['BX', 'UX', 'CX'].includes(system)) return 'System harus BX, UX, atau CX';
+    if (!blade || !partsMap[blade]) return 'Blade wajib diisi';
+
+    const rules = getBladeRules(partsMap[blade]);
 
     if (system === 'CX') {
       if (!lockChip || !partsMap[lockChip]) return 'Lock Chip wajib diisi';
-      if (!blade || !partsMap[blade]) return 'Blade wajib diisi';
       if (!assistBlade || !partsMap[assistBlade]) return 'Assist Blade wajib diisi';
-      if (!ratchet || !partsMap[ratchet]) return 'Ratchet wajib diisi';
+      if (rules.hasOverBlade && (!overBlade || !partsMap[overBlade])) return 'Blade ini membutuhkan Over Blade';
+      if (!rules.hasOverBlade && overBlade) return 'Blade ini tidak memiliki Over Blade';
+    } else if (lockChip || assistBlade || overBlade) {
+      return 'Lock Chip, Over Blade, dan Assist Blade hanya untuk CX';
+    }
+
+    const selectedBit = bit ? partsMap[bit] : null;
+    const bitRules = getBladeRules(selectedBit);
+
+    if (rules.integratedRatchetBit) {
+      if (ratchet || bit) return 'Blade ini sudah memiliki Ratchet + Bit bawaan';
+    } else if (rules.integratedRatchet) {
+      if (ratchet) return 'Blade ini sudah memiliki Ratchet bawaan';
+
+      if (selectedBit && (bitRules.integratedRatchet || bitRules.integratedRatchetBit)) {
+        return 'Blade ini sudah memiliki Ratchet bawaan, jadi Bit dengan Ratchet bawaan tidak boleh dipakai';
+      }
+
+      if (!bit || !partsMap[bit]) return 'Bit wajib diisi';
+    } else if (bitRules.integratedRatchetBit) {
+      if (ratchet) return 'Bit ini sudah memiliki Ratchet + Bit bawaan';
+      if (!bit || !partsMap[bit]) return 'Bit wajib diisi';
+    } else if (bitRules.integratedRatchet) {
+      if (ratchet) return 'Bit ini sudah memiliki Ratchet bawaan';
       if (!bit || !partsMap[bit]) return 'Bit wajib diisi';
     } else {
-      if (!blade || !partsMap[blade]) return 'Blade wajib diisi';
       if (!ratchet || !partsMap[ratchet]) return 'Ratchet wajib diisi';
       if (!bit || !partsMap[bit]) return 'Bit wajib diisi';
     }
@@ -425,6 +441,7 @@ export default function MyDecks({ user }) {
         system: form.system,
         lockChip: form.lockChip,
         blade: form.blade,
+        overBlade: form.overBlade,
         assistBlade: form.assistBlade,
         ratchet: form.ratchet,
         bit: form.bit,
@@ -448,7 +465,8 @@ export default function MyDecks({ user }) {
         toast.error(res?.message || 'Gagal menyimpan deck');
       }
     } catch (err) {
-      toast.error('Gagal menyimpan deck');
+      console.error('[DECK SAVE ERROR]', err);
+      toast.error(err?.message || 'Gagal menyimpan deck');
     } finally {
       setIsCreating(false);
     }
@@ -464,7 +482,7 @@ export default function MyDecks({ user }) {
       } else {
         toast.error(res?.message || 'Gagal mengubah status deck');
       }
-    } catch (err) {
+    } catch {
       toast.error('Gagal mengubah status deck');
     } finally {
       setProcessingDeckId(null);
@@ -482,7 +500,7 @@ export default function MyDecks({ user }) {
       } else {
         toast.error(res?.message || 'Gagal memperbaiki deck');
       }
-    } catch (err) {
+    } catch {
       toast.error('Gagal memperbaiki deck');
     }
   };
@@ -499,21 +517,38 @@ export default function MyDecks({ user }) {
       } else {
         toast.error(res?.message || 'Gagal menghapus deck');
       }
-    } catch (err) {
+    } catch {
       toast.error('Terjadi kesalahan saat menghapus');
     } finally {
       setIsCreating(false);
     }
   };
 
-  const isCx = form.system === 'CX';
-
   const getFilteredParts = (type, system) => {
+    const normalizedType = normalizePartType(type);
+
     return parts.filter(p => {
-      if (p.partType !== type) return false;
+      if (normalizePartType(p.partType) !== normalizedType) return false;
       if (!p.isActive) return false;
-      if (system === 'ALL') return true;
-      return p.system === 'ALL' || p.system === system;
+
+      if (system !== 'ALL' && p.system !== 'ALL' && p.system !== system) {
+        return false;
+      }
+
+      // Blade yang sudah membawa Ratchet TIDAK BOLEH
+      // dipasangkan dengan part yang juga membawa Ratchet.
+      if (
+        normalizedType === 'BIT' &&
+        (bladeRules.integratedRatchet || bladeRules.integratedRatchetBit)
+      ) {
+        const candidateRules = getBladeRules(p);
+
+        if (candidateRules.integratedRatchet || candidateRules.integratedRatchetBit) {
+          return false;
+        }
+      }
+
+      return true;
     });
   };
 
@@ -521,6 +556,7 @@ export default function MyDecks({ user }) {
     const fieldMap = [
       { key: 'lockChip', partType: 'LOCK CHIP' },
       { key: 'blade', partType: 'BLADE' },
+      { key: 'overBlade', partType: 'OVER BLADE' },
       { key: 'assistBlade', partType: 'ASSIST BLADE' },
       { key: 'ratchet', partType: 'RATCHET' },
       { key: 'bit', partType: 'BIT' }
@@ -532,7 +568,7 @@ export default function MyDecks({ user }) {
       if (!part) return;
       parts.push({
         ...part,
-        partType: part.partType || partType,
+        partType: normalizePartType(part.partType || partType),
         variant: part.variant || ''
       });
     });
@@ -984,13 +1020,68 @@ export default function MyDecks({ user }) {
 
               <div className="flex-1 overflow-y-auto p-4 grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 content-start [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-thumb]:bg-gray-600 [&::-webkit-scrollbar-track]:bg-transparent">
                 {getFilteredParts(
-                  activePicker === 'lockChip' ? 'LOCK_CHIP' : activePicker === 'assistBlade' ? 'ASSIST_BLADE' : activePicker.toUpperCase(), 
+                  activePicker === 'lockChip' ? 'LOCK_CHIP' : activePicker === 'overBlade' ? 'OVER_BLADE' : activePicker === 'assistBlade' ? 'ASSIST_BLADE' : activePicker.toUpperCase(), 
                   form.system
                 ).map(part => (
                   <div 
                     key={part.partId} 
                     onClick={() => {
-                      setForm(prev => ({ ...prev, [activePicker]: part.partId }));
+                      // Jangan izinkan Bit yang membawa Ratchet dipasang
+                      // pada Blade yang juga sudah membawa Ratchet.
+                      if (activePicker === 'bit') {
+                        const candidateRules = getBladeRules(part);
+
+                        if (
+                          (bladeRules.integratedRatchet || bladeRules.integratedRatchetBit) &&
+                          (candidateRules.integratedRatchet || candidateRules.integratedRatchetBit)
+                        ) {
+                          toast.error('Bit ini sudah memiliki Ratchet bawaan dan tidak kompatibel dengan Blade pilihanmu.');
+                          return;
+                        }
+                      }
+
+                      setForm(prev => {
+                        const next = { ...prev, [activePicker]: part.partId };
+
+                        if (activePicker === 'blade') {
+                          const rules = getBladeRules(part);
+
+                          if (next.system !== 'CX' || !rules.hasOverBlade) {
+                            next.overBlade = '';
+                          }
+
+                          if (rules.integratedRatchetBit) {
+                            next.ratchet = '';
+                            next.bit = '';
+                          } else if (rules.integratedRatchet) {
+                            next.ratchet = '';
+
+                            // Bila Bit sebelumnya ternyata juga membawa Ratchet,
+                            // kosongkan agar user memilih Bit yang kompatibel.
+                            const currentBit = partsMap[next.bit];
+                            const currentBitRules = getBladeRules(currentBit);
+
+                            if (
+                              currentBit &&
+                              (currentBitRules.integratedRatchet || currentBitRules.integratedRatchetBit)
+                            ) {
+                              next.bit = '';
+                            }
+                          }
+                        }
+
+                        if (activePicker === 'bit') {
+                          const rules = getBladeRules(part);
+
+                          // Bit yang membawa Ratchet otomatis menghapus Ratchet manual.
+                          if (rules.integratedRatchet || rules.integratedRatchetBit) {
+                            next.ratchet = '';
+                          }
+                        }
+
+                        return next;
+                      });
+
                       setActivePicker(null);
                     }}
                     className="bg-black/40 rounded-xl p-3 flex flex-col items-center cursor-pointer hover:bg-blue-600/20 border border-transparent hover:border-blue-500/50 transition-all active:scale-95 active:border-blue-500/50"

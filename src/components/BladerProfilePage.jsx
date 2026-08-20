@@ -4,6 +4,7 @@ import { motion } from 'framer-motion';
 import { ArrowLeft, Users, Trophy, Calendar, ExternalLink } from 'lucide-react';
 import PublicNavbar from './PublicNavbar';
 import { getBladerProfile } from '../utils/api';
+import PublicDeckShowcase from './PublicDeckShowcase';
 
 const fadeUp = {
   hidden: { opacity: 0, y: 20 },
@@ -298,6 +299,21 @@ export default function BladerProfilePage() {
               ))}
             </div>
           )}
+        </motion.div>
+
+        {/* ACTIVE DECKS — same visual language as Landing Page */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3 }}
+          className="bg-gray-900/80 backdrop-blur-sm rounded-[2rem] border border-white/5 p-6 md:p-8 shadow-2xl mb-6"
+        >
+          <div className="mb-6">
+            <p className="text-[9px] font-black uppercase tracking-[0.2em] text-yellow-400">Active Decks</p>
+            <h3 className="mt-1 text-xl font-black uppercase italic text-white">Combo Deck</h3>
+            <p className="text-[10px] font-bold uppercase tracking-widest text-gray-500 mt-1">3 deck aktif terakhir milik blader ini</p>
+          </div>
+          <PublicDeckShowcase decks={Array.isArray(profile.decks) ? profile.decks.slice(0, 3) : []} />
         </motion.div>
       </div>
     </div>
