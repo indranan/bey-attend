@@ -1320,16 +1320,6 @@ function generateShortDeckId() {
   return result;
 }
 
-function normalizePartId_(partId) {
-  return String(partId || '').trim().toUpperCase();
-}
-
-function getPartById_(partsMap, partId) {
-  if (!partId) return null;
-  const raw = String(partId).trim();
-  return partsMap[raw] || partsMap[normalizePartId_(raw)] || null;
-}
-
 function normalizeDeckPartType_(partType) {
   const key = String(partType || '').trim().toUpperCase();
   const aliases = {
@@ -1490,7 +1480,7 @@ function validateDeckPartIds(data, partsMap) {
   const fail = (message) => ({ valid: false, message });
   const validate = (partId, expectedType, allowedSystems) => {
     if (!partId) return true;
-    const part = getPartById_(partsMap, partId);
+    const part = partsMap[partId];
     if (!part || !part.isActive) return false;
     if (normalizeDeckPartType_(part.partType) !== expectedType) return false;
     if (allowedSystems && !allowedSystems.includes(String(part.system || '').toUpperCase().trim())) return false;
@@ -1499,7 +1489,7 @@ function validateDeckPartIds(data, partsMap) {
 
   if (!['BX', 'UX', 'CX'].includes(system)) return fail('System harus BX, UX, atau CX');
   if (!blade) return fail('Blade wajib diisi');
-  const bladePart = getPartById_(partsMap, blade);
+  const bladePart = partsMap[blade];
   if (!bladePart || !bladePart.isActive || normalizeDeckPartType_(bladePart.partType) !== 'BLADE') {
     return fail('Blade tidak valid');
   }
@@ -1627,7 +1617,7 @@ function getBeybladePartsMap() {
     }
     seen[partId] = true;
 
-    const partRecord = {
+    map[partId] = {
       partId,
       system,
       partType,
@@ -1637,9 +1627,6 @@ function getBeybladePartsMap() {
       integratedRatchet: headerMap['integrated_ratchet'] !== undefined ? asBoolean_(row[headerMap['integrated_ratchet']]) : false,
       integratedRatchetBit: headerMap['integrated_ratchet_bit'] !== undefined ? asBoolean_(row[headerMap['integrated_ratchet_bit']]) : false
     };
-
-    map[partId] = partRecord;
-    map[normalizePartId_(partId)] = partRecord;
   });
 
   if (duplicates.length > 0) {
@@ -1691,22 +1678,12 @@ function getDecksByGoogleId_(googleId, filter, limit, publicMode) {
   const decks = [];
 
   const resolvePart = (partId) => {
-    const rawId = String(partId || '').trim();
-    if (!rawId) return null;
-
-    const part = getPartById_(partsMap, rawId);
-    if (!part) {
-      return {
-        partId: rawId,
-        name: rawId,
-        partType: '',
-        system: ''
-      };
-    }
-
+    if (!partId) return null;
+    const part = partsMap[partId];
+    if (!part) return { partId, name: partId, partType: '', system: '' };
     return {
       partId: part.partId,
-      name: part.name || part.partId,
+      name: part.name,
       partType: part.partType,
       system: part.system,
       hasOverBlade: !!part.hasOverBlade,
@@ -1727,7 +1704,7 @@ function getDecksByGoogleId_(googleId, filter, limit, publicMode) {
     const systemValue = systemCol !== undefined ? String(row[systemCol] || '').trim().toUpperCase() : '';
     const bladeRawId = bladeCol !== undefined ? String(row[bladeCol] || '').trim() : '';
     const bladeResolved = resolvePart(bladeRawId);
-    const bladeMeta = bladeRawId ? getPartById_(partsMap, bladeRawId) : null;
+    const bladeMeta = bladeRawId && partsMap[bladeRawId] ? partsMap[bladeRawId] : null;
     const hasOverBlade = !!bladeMeta?.hasOverBlade;
     const integratedRatchet = !!bladeMeta?.integratedRatchet;
     const integratedRatchetBit = !!bladeMeta?.integratedRatchetBit;
@@ -1826,6 +1803,73 @@ function resolveDeckOwner(data) {
   return { authorized: true, googleId };
 }
 
+
+function validateActiveDeckPartUniqueness_(data, values, headers, ownerGoogleId, excludeDeckId) {
+  const isActive = String(data?.isActive ?? 'TRUE').toLowerCase().trim() !== 'false';
+  if (!isActive) {
+    return { valid: true };
+  }
+
+  const headerIndex = {};
+  headers.forEach((h, i) => {
+    headerIndex[String(h || '').toLowerCase().trim()] = i;
+  });
+
+  const googleIdCol = headerIndex['google_id'];
+  const isActiveCol = headerIndex['is_active'];
+  if (googleIdCol === undefined || isActiveCol === undefined) {
+    return { valid: false, message: 'Header BladerDecks tidak lengkap untuk validasi active deck' };
+  }
+
+  const partColumns = [
+    ['lock_chip', 'Lock Chip'],
+    ['blade', 'Blade'],
+    ['over_blade', 'Over Blade'],
+    ['assist_blade', 'Assist Blade'],
+    ['ratchet', 'Ratchet'],
+    ['bit', 'Bit']
+  ].filter(([header]) => headerIndex[header] !== undefined);
+
+  const candidateIds = new Map();
+  partColumns.forEach(([header, label]) => {
+    const id = String(data?.[
+      header === 'lock_chip' ? 'lockChip' :
+      header === 'over_blade' ? 'overBlade' :
+      header === 'assist_blade' ? 'assistBlade' :
+      header === 'ratchet' ? 'ratchet' :
+      header === 'bit' ? 'bit' : 'blade'
+    ] || '').trim();
+
+    if (id) candidateIds.set(id.toUpperCase(), label);
+  });
+
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+    const rowGoogleId = String(row[googleIdCol] || '').trim();
+    const rowDeckId = headerIndex['deck_id'] !== undefined
+      ? String(row[headerIndex['deck_id']] || '').trim()
+      : '';
+    const rowIsActive = String(row[isActiveCol] || '').toLowerCase().trim() === 'true';
+
+    if (rowGoogleId !== ownerGoogleId || !rowIsActive) continue;
+    if (excludeDeckId && rowDeckId === excludeDeckId) continue;
+
+    for (const [header, label] of partColumns) {
+      const existingId = String(row[headerIndex[header]] || '').trim().toUpperCase();
+      if (!existingId) continue;
+
+      if (candidateIds.has(existingId)) {
+        return {
+          valid: false,
+          message: `${candidateIds.get(existingId)} sudah dipakai oleh active deck lain`
+        };
+      }
+    }
+  }
+
+  return { valid: true };
+}
+
 function createDeck(data) {
   const auth = resolveDeckOwner(data);
   if (!auth.authorized) return res({ status: 'error', message: auth.error });
@@ -1853,17 +1897,10 @@ function createDeck(data) {
   const validation = validateDeckPartIds(data, partsMap);
   if (!validation.valid) return res({ status: 'error', message: validation.message });
 
-  const canonicalId = (value) => {
-    const part = getPartById_(partsMap, value);
-    return part ? part.partId : String(value || '').trim();
-  };
-
-  const storedLockChip = canonicalId(lockChip);
-  const storedBlade = canonicalId(blade);
-  const storedOverBlade = canonicalId(overBlade);
-  const storedAssistBlade = canonicalId(assistBlade);
-  const storedRatchet = canonicalId(ratchet);
-  const storedBit = canonicalId(bit);
+  const activeUnique = validateActiveDeckPartUniqueness_(data, values, headers, userGoogleId, null);
+  if (!activeUnique.valid) {
+    return res({ status: 'error', message: activeUnique.message });
+  }
 
   const isActive = String(data.isActive || '').toLowerCase().trim() !== 'false';
   const googleIdCol = idx('google_id');
@@ -1878,14 +1915,8 @@ function createDeck(data) {
   const row = new Array(deckSheet.getLastColumn()).fill('');
   const valuesByHeader = {
     'deck_id': deckId, 'google_id': userGoogleId, 'deck_name': deckName, 'system': system,
-    'lock_chip': storedLockChip,
-    'blade': storedBlade,
-    'over_blade': storedOverBlade,
-    'assist_blade': storedAssistBlade,
-    'ratchet': storedRatchet,
-    'bit': storedBit,
-    'description': description,
-    'is_active': isActive ? 'TRUE' : 'FALSE',
+    'lock_chip': lockChip, 'blade': blade, 'over_blade': overBlade, 'assist_blade': assistBlade,
+    'ratchet': ratchet, 'bit': bit, 'description': description, 'is_active': isActive ? 'TRUE' : 'FALSE',
     'created_at': timestamp, 'updated_at': timestamp
   };
   headers.forEach((header, i) => { if (valuesByHeader[header] !== undefined) row[i] = valuesByHeader[header]; });
@@ -1927,21 +1958,23 @@ function updateDeck(data) {
   const validation = validateDeckPartIds(data, partsMap);
   if (!validation.valid) return res({ status: 'error', message: validation.message });
 
-  const canonicalId = (value) => {
-    const part = getPartById_(partsMap, value);
-    return part ? part.partId : String(value || '').trim();
-  };
+  const activeUnique = validateActiveDeckPartUniqueness_(data, values, headers, userGoogleId, deckId);
+  if (!activeUnique.valid) {
+    return res({ status: 'error', message: activeUnique.message });
+  }
 
+  const isActive = String(data.isActive || '').toLowerCase().trim() !== 'false';
   const updates = {
     deck_name: deckName,
     system,
-    lock_chip: canonicalId(lockChip),
-    blade: canonicalId(blade),
-    over_blade: canonicalId(overBlade),
-    assist_blade: canonicalId(assistBlade),
-    ratchet: canonicalId(ratchet),
-    bit: canonicalId(bit),
-    description
+    lock_chip: lockChip,
+    blade,
+    over_blade: overBlade,
+    assist_blade: assistBlade,
+    ratchet,
+    bit,
+    description,
+    is_active: isActive ? 'TRUE' : 'FALSE'
   };
   Object.entries(updates).forEach(([header, value]) => { const col = idx(header); if (col >= 0) deckSheet.getRange(targetRowIndex, col + 1).setValue(value); });
   if (idx('updated_at') >= 0) deckSheet.getRange(targetRowIndex, idx('updated_at') + 1).setValue(Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss'));

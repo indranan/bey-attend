@@ -171,6 +171,37 @@ export default function MyDecks({ user }) {
     return map;
   }, [parts]);
 
+
+  // Part yang sudah dipakai oleh ACTIVE deck lain milik user ini
+  // tidak boleh dipilih lagi. Deck yang sedang diedit dikecualikan.
+  const usedActivePartIds = useMemo(() => {
+    const used = new Set();
+    const editingId = editingDeck?.deckId || null;
+
+    allDecks
+      .filter(deck => deck.isActive && deck.deckId !== editingId)
+      .forEach(deck => {
+        [
+          deck.lockChip,
+          deck.blade,
+          deck.overBlade,
+          deck.assistBlade,
+          deck.ratchet,
+          deck.bit
+        ].forEach(part => {
+          const id = String(part?.partId || '').trim();
+          if (id) used.add(id.toUpperCase());
+        });
+      });
+
+    return used;
+  }, [allDecks, editingDeck?.deckId]);
+
+  const isPartUsedByAnotherActiveDeck = (partId) => {
+    const id = String(partId || '').trim();
+    return id ? usedActivePartIds.has(id.toUpperCase()) : false;
+  };
+
   const fetchDecks = async () => {
     try {
       const res = await getMyDecks({ filter: 'all', googleId });
@@ -387,6 +418,23 @@ export default function MyDecks({ user }) {
   const validateForm = () => {
     const { deckName, system, lockChip, blade, overBlade, assistBlade, ratchet, bit } = form;
     if (!deckName.trim()) return 'Deck name wajib diisi';
+
+    // Saat ACTIVE, satu part tidak boleh digunakan oleh dua active deck.
+    if (form.isActive === 'TRUE') {
+      const selectedIds = [
+        ['Lock Chip', lockChip],
+        ['Blade', blade],
+        ['Over Blade', overBlade],
+        ['Assist Blade', assistBlade],
+        ['Ratchet', ratchet],
+        ['Bit', bit]
+      ];
+
+      const duplicate = selectedIds.find(([, id]) => isPartUsedByAnotherActiveDeck(id));
+      if (duplicate) {
+        return `${duplicate[0]} ${duplicate[1]} sudah dipakai oleh active deck lain`;
+      }
+    }
     if (!['BX', 'UX', 'CX'].includes(system)) return 'System harus BX, UX, atau CX';
     if (!blade || !partsMap[blade]) return 'Blade wajib diisi';
 
@@ -535,14 +583,19 @@ export default function MyDecks({ user }) {
         return false;
       }
 
-      // Blade yang sudah membawa Ratchet TIDAK BOLEH
-      // dipasangkan dengan part yang juga membawa Ratchet.
+      // Jangan tampilkan part yang sudah dipakai active deck lain.
+      // Part yang sedang dipakai deck yang sedang diedit tetap boleh dipilih.
+      if (isPartUsedByAnotherActiveDeck(p.partId)) {
+        return false;
+      }
+
+      // Blade/Bit compatibility: jangan pasangkan dua komponen
+      // yang sama-sama membawa Ratchet bawaan.
       if (
         normalizedType === 'BIT' &&
         (bladeRules.integratedRatchet || bladeRules.integratedRatchetBit)
       ) {
         const candidateRules = getBladeRules(p);
-
         if (candidateRules.integratedRatchet || candidateRules.integratedRatchetBit) {
           return false;
         }
@@ -1026,6 +1079,11 @@ export default function MyDecks({ user }) {
                   <div 
                     key={part.partId} 
                     onClick={() => {
+                      if (isPartUsedByAnotherActiveDeck(part.partId)) {
+                        toast.error('Part ini sudah dipakai oleh active deck lain.');
+                        return;
+                      }
+
                       // Jangan izinkan Bit yang membawa Ratchet dipasang
                       // pada Blade yang juga sudah membawa Ratchet.
                       if (activePicker === 'bit') {
