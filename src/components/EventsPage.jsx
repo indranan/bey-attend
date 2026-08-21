@@ -39,15 +39,71 @@ const getEventDateTime = (event) => {
   return date || time;
 };
 
+const getEventTimestamp = (event) => {
+  if (!event) return 0;
+
+  const rawDate = String(
+    event.tanggal_event ||
+    event.tanggal_buat ||
+    ''
+  ).trim();
+
+  const rawTime = String(
+    event.waktu_event ||
+    event.waktu ||
+    '00:00'
+  ).trim();
+
+  if (!rawDate) return 0;
+
+  // ISO: 2026-08-14 / 2026-08-14T00:00:00
+  if (/^\d{4}-\d{2}-\d{2}/.test(rawDate)) {
+    const isoDate = rawDate.includes('T')
+      ? rawDate
+      : `${rawDate}T${rawTime.substring(0, 5) || '00:00'}:00`;
+
+    const timestamp = new Date(isoDate).getTime();
+
+    if (!Number.isNaN(timestamp)) {
+      return timestamp;
+    }
+  }
+
+  // Format: DD/MM/YYYY atau DD-MM-YYYY
+  const numericMatch = rawDate.match(
+    /^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/
+  );
+
+  if (numericMatch) {
+    const [, day, month, year] = numericMatch;
+
+    const timestamp = new Date(
+      Number(year),
+      Number(month) - 1,
+      Number(day),
+      Number(rawTime.substring(0, 2)) || 0,
+      Number(rawTime.substring(3, 5)) || 0
+    ).getTime();
+
+    if (!Number.isNaN(timestamp)) {
+      return timestamp;
+    }
+  }
+
+  // Fallback terakhir untuk format tanggal yang bisa dikenali browser.
+  const fallback = new Date(`${rawDate} ${rawTime}`).getTime();
+
+  return Number.isNaN(fallback) ? 0 : fallback;
+};
+
 const StatusTab = ({ label, active, onClick }) => (
   <button
     type="button"
     onClick={onClick}
-    className={`px-5 py-2.5 rounded-full text-[10px] font-black uppercase tracking-widest transition-all ${
-      active
-        ? 'bg-blue-500 text-white shadow-lg shadow-blue-500/30'
-        : 'bg-gray-900/80 text-gray-400 border border-white/10 hover:text-white hover:border-white/20'
-    }`}
+    className={`px-5 py-2.5 rounded-full text-[10px] font-black uppercase tracking-widest transition-all ${active
+      ? 'bg-blue-500 text-white shadow-lg shadow-blue-500/30'
+      : 'bg-gray-900/80 text-gray-400 border border-white/10 hover:text-white hover:border-white/20'
+      }`}
   >
     {label}
   </button>
@@ -109,10 +165,12 @@ export default function EventsPage({ currentEvent = null, events = [] }) {
       list.sort((a, b) => {
         const dateA = a.tanggal_event || a.tanggal_buat || '';
         const dateB = b.tanggal_event || b.tanggal_buat || '';
-        if (dateA && dateB) return dateA.localeCompare(dateB);
+
+        if (dateA && dateB) return dateB.localeCompare(dateA);
         if (dateA) return -1;
         if (dateB) return 1;
-        return (a.event_id || '').localeCompare(b.event_id || '');
+
+        return (b.event_id || '').localeCompare(a.event_id || '');
       });
     } else if (activeTab === 'LIVE') {
       list = list.filter(e => e.status === 'aktif');
@@ -126,13 +184,20 @@ export default function EventsPage({ currentEvent = null, events = [] }) {
       });
     } else if (activeTab === 'COMPLETED') {
       list = list.filter(e => e.status === 'selesai');
+
       list.sort((a, b) => {
-        const dateA = a.tanggal_event || a.tanggal_buat || '';
-        const dateB = b.tanggal_event || b.tanggal_buat || '';
-        if (dateA && dateB) return dateB.localeCompare(dateA);
-        if (dateA) return -1;
-        if (dateB) return 1;
-        return (b.event_id || '').localeCompare(a.event_id || '');
+        const timeA = getEventTimestamp(a);
+        const timeB = getEventTimestamp(b);
+
+        // Terbaru → terlama
+        if (timeA !== timeB) {
+          return timeB - timeA;
+        }
+
+        // Kalau tanggal sama, gunakan event_id sebagai tie breaker
+        return String(b.event_id || b.id || '').localeCompare(
+          String(a.event_id || a.id || '')
+        );
       });
     }
 
@@ -194,14 +259,14 @@ export default function EventsPage({ currentEvent = null, events = [] }) {
             <div className="mx-auto mb-3 flex w-fit items-center gap-2 rounded-full border border-cyan-300/20 bg-cyan-400/10 px-3 py-1 text-[9px] font-black uppercase tracking-[0.2em] text-cyan-200">
               <Sparkles size={12} /> Battle Calendar
             </div>
-          <h1 className="text-3xl md:text-5xl font-black italic uppercase tracking-tighter mb-2">
-            <span className="bg-gradient-to-r from-blue-400 via-cyan-400 to-blue-500 bg-clip-text text-transparent">
-              EVENTS
-            </span>
-          </h1>
-          <p className="text-xs font-black text-gray-500 uppercase tracking-[0.2em]">
-            Lalapan Beyblade Tournament
-          </p>
+            <h1 className="text-3xl md:text-5xl font-black italic uppercase tracking-tighter mb-2">
+              <span className="bg-gradient-to-r from-blue-400 via-cyan-400 to-blue-500 bg-clip-text text-transparent">
+                EVENTS
+              </span>
+            </h1>
+            <p className="text-xs font-black text-gray-500 uppercase tracking-[0.2em]">
+              Lalapan Beyblade Tournament
+            </p>
             <div className="mt-6 flex flex-wrap items-center justify-center gap-3 text-left">
               <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-black/20 px-4 py-2.5">
                 <CalendarDays size={18} className="text-cyan-300" />
@@ -290,7 +355,7 @@ export default function EventsPage({ currentEvent = null, events = [] }) {
                       <div className="w-8 h-8 rounded-lg bg-gray-800/80 flex items-center justify-center flex-shrink-0">
                         <Clock8 size={16} className="text-gray-400" />
                       </div>
-                       <span>{getEventDateTime(currentEvent)}</span>
+                      <span>{getEventDateTime(currentEvent)}</span>
                     </div>
                   )}
                 </div>
@@ -397,16 +462,15 @@ export default function EventsPage({ currentEvent = null, events = [] }) {
                           {getStatusLabel(event.status)}
                         </span>
                         {String(event.status || '').toLowerCase() === 'aktif' && (
-                          <span className={`inline-block px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border ${
-                            event.tournament_status === 'not_started' ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30' :
+                          <span className={`inline-block px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border ${event.tournament_status === 'not_started' ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30' :
                             event.tournament_status === 'running' ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' :
-                            event.tournament_status === 'finished' ? 'bg-orange-500/20 text-orange-400 border-orange-500/30' :
-                            'bg-gray-500/20 text-gray-400 border-gray-500/30'
-                          }`}>
+                              event.tournament_status === 'finished' ? 'bg-orange-500/20 text-orange-400 border-orange-500/30' :
+                                'bg-gray-500/20 text-gray-400 border-gray-500/30'
+                            }`}>
                             {event.tournament_status === 'not_started' ? 'CHECK-IN OPEN' :
-                             event.tournament_status === 'running' ? 'TOURNAMENT RUNNING' :
-                             event.tournament_status === 'finished' ? 'TOURNAMENT FINISHED' :
-                             String(event.tournament_status || '').toUpperCase()}
+                              event.tournament_status === 'running' ? 'TOURNAMENT RUNNING' :
+                                event.tournament_status === 'finished' ? 'TOURNAMENT FINISHED' :
+                                  String(event.tournament_status || '').toUpperCase()}
                           </span>
                         )}
                       </div>

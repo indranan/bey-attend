@@ -143,12 +143,99 @@ export default function PublicNavbar({ onGoogleLogin }) {
         </div>
 
         <div className="md:hidden flex items-center gap-2">
-          {!user && (
+          {user ? (
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setIsProfileOpen(!isProfileOpen)}
+                className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-full pl-1 pr-2.5 py-1 hover:bg-white/10 transition-colors max-w-[145px]"
+                aria-label="Open profile menu"
+              >
+                {displayPhoto ? (
+                  <img
+                    src={displayPhoto}
+                    alt={displayName || 'Profile'}
+                    className="w-7 h-7 rounded-full object-cover border border-white/10 shrink-0"
+                  />
+                ) : (
+                  <div className="w-7 h-7 rounded-full bg-gray-800 border border-white/10 flex items-center justify-center text-gray-400 shrink-0">
+                    <User size={14} />
+                  </div>
+                )}
+
+                <span className="text-[9px] font-black text-white uppercase tracking-widest truncate max-w-[78px]">
+                  {displayName || 'Profile'}
+                </span>
+
+                <ChevronDown
+                  size={13}
+                  className={`text-gray-400 shrink-0 transition-transform ${isProfileOpen ? 'rotate-180' : ''
+                    }`}
+                />
+              </button>
+
+              {isProfileOpen && (
+                <div className="absolute right-0 top-full mt-2 w-40 bg-gray-900 border border-white/10 rounded-2xl shadow-2xl overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigate('/profile');
+                      setIsProfileOpen(false);
+                    }}
+                    className="w-full text-left px-4 py-3 text-xs font-black text-white hover:bg-white/5 transition-colors flex items-center gap-2"
+                  >
+                    <User size={14} />
+                    Profile
+                  </button>
+
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigate('/admin');
+                        setIsProfileOpen(false);
+                      }}
+                      className="w-full text-left px-4 py-3 text-xs font-black text-blue-400 hover:bg-white/5 transition-colors flex items-center gap-2"
+                    >
+                      <ShieldCheck size={14} />
+                      Admin
+                    </button>
+                  )}
+
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigate('/arena');
+                        setIsProfileOpen(false);
+                      }}
+                      className="w-full text-left px-4 py-3 text-xs font-black text-cyan-400 hover:bg-white/5 transition-colors flex items-center gap-2"
+                    >
+                      <Swords size={14} />
+                      Arena
+                    </button>
+                  )}
+
+                  <div className="border-t border-white/5" />
+
+                  <button
+                    type="button"
+                    onClick={handleLogout}
+                    className="w-full text-left px-4 py-3 text-xs font-black text-red-400 hover:bg-white/5 transition-colors flex items-center gap-2"
+                  >
+                    <LogOut size={14} />
+                    Logout
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
             <GoogleSignInButton
               onLogin={handleLogin}
               compact
             />
           )}
+
           <button
             type="button"
             onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}

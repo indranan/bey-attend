@@ -643,8 +643,12 @@ export default function EventDetailPage() {
 function InfoCard({ label, value }) {
   return (
     <div className="bg-gray-800/50 rounded-2xl border border-white/5 p-4">
-      <p className="text-[9px] font-black text-gray-500 uppercase tracking-widest mb-1">{label}</p>
-      <p className="text-sm font-black text-white truncate">{value}</p>
+      <p className="text-[9px] font-black text-gray-500 uppercase tracking-widest mb-1">
+        {label}
+      </p>
+      <p className="text-sm font-black text-white leading-snug break-words line-clamp-2">
+        {value}
+      </p>
     </div>
   );
 }
