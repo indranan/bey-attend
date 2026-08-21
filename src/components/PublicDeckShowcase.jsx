@@ -1,7 +1,8 @@
 import { motion } from 'framer-motion';
 import { getDeckParts, getPartImage, getComboName } from '../utils/deckUtils';
 
-const imageClass = 'w-32 h-32 sm:w-36 sm:h-36 md:w-40 md:h-40 object-contain drop-shadow-[0_0_18px_rgba(59,130,246,0.22)] transition-transform duration-300 group-hover:scale-[1.08]';
+const imageClass =
+  'w-[88px] h-[88px] sm:w-[100px] sm:h-[100px] md:w-[110px] md:h-[110px] object-contain drop-shadow-[0_0_18px_rgba(59,130,246,0.22)] transition-transform duration-300 group-hover:scale-[1.04]';
 
 export default function PublicDeckShowcase({ decks = [] }) {
   if (!decks.length) {
@@ -13,9 +14,9 @@ export default function PublicDeckShowcase({ decks = [] }) {
   }
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+    <div className="grid w-full grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
       {decks.slice(0, 3).map((deck, index) => (
-        <motion.div key={deck.deckId || index} custom={index} initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, margin: '-40px' }} className="group bg-gray-900/70 backdrop-blur-sm rounded-[1.5rem] p-5 border border-white/5 hover:border-yellow-500/20 transition-all">
+        <motion.div key={deck.deckId || index} custom={index} initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, margin: '-40px' }} className="group w-full bg-gray-900/70 backdrop-blur-sm rounded-[1.5rem] p-5 border border-white/5 hover:border-yellow-500/20 transition-all">
           <div className="flex items-start justify-between gap-3 mb-4">
             <div className="min-w-0 flex-1">
               <p className="text-[9px] font-black text-yellow-400 uppercase tracking-widest mb-1">Combo Deck {index + 1}</p>
@@ -30,7 +31,7 @@ export default function PublicDeckShowcase({ decks = [] }) {
             {getDeckParts(deck).map(([label, part]) => {
               const image = getPartImage(part);
               return (
-                <motion.div key={`${deck.deckId || index}-${label}`} whileHover={{ y: -4, scale: 1.015 }} transition={{ type: 'spring', stiffness: 320, damping: 22 }} className="group relative aspect-square rounded-2xl bg-gray-950/70 border border-white/5 overflow-hidden p-3.5 flex flex-col items-center text-center hover:border-yellow-500/30 hover:bg-gray-950/90 transition-colors">
+                <motion.div key={`${deck.deckId || index}-${label}`} whileHover={{ y: -4, scale: 1.015 }} transition={{ type: 'spring', stiffness: 320, damping: 22 }} className="group relative aspect-square rounded-2xl bg-gray-950/70 border border-white/5 overflow-hidden p-3 flex flex-col items-center text-center hover:border-yellow-500/30 hover:bg-gray-950/90 transition-colors">
                   <p className="text-[10px] sm:text-[11px] font-black text-gray-500 uppercase tracking-widest">{label}</p>
                   <div className="flex-1 w-full min-h-0 flex items-center justify-center py-1">
                     {image ? <img src={image} alt={part.name || part.partId} className={imageClass} loading="lazy" /> : <div className="w-16 h-16 rounded-full border border-white/5 bg-gray-900/60 flex items-center justify-center text-[9px] font-black text-gray-700">NO IMG</div>}
