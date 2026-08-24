@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, useInView } from 'framer-motion';
-import { Trophy, MapPin, Clock8, Users, ChevronDown, Crown, Medal, Star } from 'lucide-react';
+import { Trophy, MapPin, Clock8, Calendar, Users, ChevronDown, Crown, Medal, Star } from 'lucide-react';
 import UserAvatar from './UserAvatar';
 import PublicNavbar from './PublicNavbar';
 import { getActiveDecksByGoogleId, getBeybladeParts } from '../utils/api';
@@ -69,6 +69,18 @@ const getChampionComboName = (deck) => {
     getName(deck.ratchet),
     getName(deck.bit)
   ].filter(Boolean).join(' ');
+};
+
+const formatEventDate = (dateString) => {
+  if (!dateString) return 'Tanggal belum diisi';
+  const date = new Date(dateString);
+  if (Number.isNaN(date.getTime())) return String(dateString);
+  return new Intl.DateTimeFormat('id-ID', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric'
+  }).format(date);
 };
 
 const normalizePartType = (type) => {
@@ -570,6 +582,14 @@ export default function LandingPage({ leaderboard = [], currentEvent = null, isL
                           <span>{currentEvent.lokasi}</span>
                         </div>
                       )}
+                      {currentEvent.tanggal_event && (
+                        <div className="flex items-center gap-2.5 text-xs font-bold text-gray-300">
+                          <div className="w-7 h-7 rounded-lg bg-gray-800/80 flex items-center justify-center flex-shrink-0">
+                            <Calendar size={14} className="text-gray-400" />
+                          </div>
+                          <span>{formatEventDate(currentEvent.tanggal_event)}</span>
+                        </div>
+                      )}
                       {currentEvent.waktu && (
                         <div className="flex items-center gap-2.5 text-xs font-bold text-gray-300">
                           <div className="w-7 h-7 rounded-lg bg-gray-800/80 flex items-center justify-center flex-shrink-0">
@@ -764,12 +784,6 @@ export default function LandingPage({ leaderboard = [], currentEvent = null, isL
                           );
                         })}
                       </div>
-
-                      {deck.description && (
-                        <p className="text-[10px] text-gray-500 font-medium leading-relaxed mt-4">
-                          {deck.description}
-                        </p>
-                      )}
                     </motion.div>
                   ))}
                 </div>

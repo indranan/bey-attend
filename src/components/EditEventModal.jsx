@@ -206,9 +206,9 @@ const EditEventModal = ({ show, onClose, onSubmit, isSubmitting, initialData = {
                 <label className="text-[10px] font-black text-primary uppercase ml-2 mb-1 block italic tracking-widest">Rule</label>
                 <div className="relative" ref={ruleRef}>
                   <div className="relative">
-                    <input
+                     <input
                       type="text"
-                      value={rules.find(r => r.rule_id === selectedRuleId) ? `${selectedRuleId} — ${rules.find(r => r.rule_id === selectedRuleId).nama} — ${rules.find(r => r.rule_id === selectedRuleId).periode}` : ''}
+                      value={rules.find(r => r.rule_id === selectedRuleId) ? `${selectedRuleId} — ${(rules.find(r => r.rule_id === selectedRuleId).nama || rules.find(r => r.rule_id === selectedRuleId).title)}` : ''}
                       onChange={() => {}}
                       onFocus={() => setOpenRule(true)}
                       placeholder="Pilih rule..."
@@ -241,7 +241,7 @@ const EditEventModal = ({ show, onClose, onSubmit, isSubmitting, initialData = {
                             selectedRuleId === r.rule_id ? 'text-blue-400 bg-slate-800/60' : 'text-gray-300 hover:bg-slate-800/40 hover:text-blue-300'
                           }`}
                         >
-                          {r.rule_id} — {r.nama} — {r.periode}
+                          {r.rule_id} — {r.nama || r.title}
                         </button>
                       ))}
                     </div>
