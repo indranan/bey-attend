@@ -728,7 +728,7 @@ const AdminContent = ({ user, onCreateEvent, onGenerateTournament, onUpdatePoint
               disabled={isGenerating || !eventId}
               className={quickButton('w-full bg-orange-500 text-white shadow-lg shadow-orange-500/20 hover:bg-orange-400')}
             >
-              <Trophy size={14} /> {isGenerating ? 'GENERATING...' : 'GENERATE TOURNAMENT'}
+              <Trophy size={14} /> {isGenerating ? 'GENERATING...' : format === 'final' ? 'GENERATE FINAL' : 'GENERATE TOURNAMENT'}
             </button>
             <div className="grid grid-cols-2 gap-2">
               <button
@@ -798,6 +798,17 @@ const AdminContent = ({ user, onCreateEvent, onGenerateTournament, onUpdatePoint
             </button>
           </div>
 
+          {format === 'final' && (
+            <div className="mt-4 rounded-2xl border border-red-500/10 bg-red-500/[0.04] p-4">
+              <p className="text-[9px] font-black uppercase tracking-widest text-red-300">
+                FINAL SEEDING
+              </p>
+              <p className="mt-1 text-[8px] font-bold uppercase tracking-wide text-gray-500">
+                16 pemain diambil dari Leaderboard bulan berjalan (Rank #1–#16). Urutan tidak diacak.
+              </p>
+            </div>
+          )}
+
           {format === 'weekly' && (
             <div className="mt-4 rounded-2xl border border-white/5 bg-white/[0.03] p-4">
               <div className="flex items-center justify-between gap-4">
@@ -834,7 +845,7 @@ const AdminContent = ({ user, onCreateEvent, onGenerateTournament, onUpdatePoint
             disabled={isGenerating || !eventId}
             className={quickButton('mt-4 w-full bg-orange-500 text-white shadow-lg shadow-orange-500/20 hover:bg-orange-400')}
           >
-            <Trophy size={14} /> {isGenerating ? 'GENERATING...' : 'GENERATE BRACKET'}
+            <Trophy size={14} /> {isGenerating ? 'GENERATING...' : format === 'final' ? 'GENERATE FINAL BRACKET' : 'GENERATE BRACKET'}
           </button>
         </motion.section>
 

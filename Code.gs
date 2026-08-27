@@ -791,8 +791,14 @@ function getEventDetail(eventId) {
   }
 
   let results = [];
-  const sheetName = event.nama.trim();
-  const resultSheet = SS.getSheetByName(sheetName);
+
+  // Gunakan Event ID untuk menemukan sheet hasil.
+  // findTournamentResultSheet() memiliki fallback berdasarkan nama event.
+  const resultSheetName = findTournamentResultSheet(id);
+  const resultSheet = resultSheetName
+    ? SS.getSheetByName(resultSheetName)
+    : null;
+
   if (resultSheet) {
     const resultValues = resultSheet.getDataRange().getDisplayValues();
     if (resultValues.length >= 3) {
@@ -803,7 +809,7 @@ function getEventDetail(eventId) {
       });
 
       if (resultMap['nama'] === undefined) {
-        console.error('getEventDetail: header Nama tidak ditemukan di sheet ' + sheetName + ' headers=' + JSON.stringify(resultMap));
+        console.error('getEventDetail: header Nama tidak ditemukan di sheet ' + resultSheetName + ' headers=' + JSON.stringify(resultMap));
       } else {
         const isNewFormat = resultMap['google_id'] !== undefined || resultMap['google id'] !== undefined;
         const rankIdx = resultMap['rank'];
@@ -4907,17 +4913,29 @@ function generateTournament(payload) {
       return res({ status: 'success', challongeUrl: eventData.event.challongeUrl, alreadyGenerated: true });
     }
 
-    if (!eventData.participants || eventData.participants.length < 2) {
-      return res({ status: 'error', message: 'Minimal 2 peserta untuk membuat turnamen' });
+    const formatRaw = String(payload.format || 'weekly').toLowerCase().trim();
+    const isFinal = formatRaw.indexOf('double') !== -1 || formatRaw.indexOf('final') !== -1;
+
+    let tournamentParticipants = [];
+
+    if (isFinal) {
+      const finalSeedResult = getFinalSeedParticipants_(16);
+      if (finalSeedResult.status !== 'success') return res(finalSeedResult);
+      tournamentParticipants = finalSeedResult.participants;
+    } else {
+      tournamentParticipants = Array.isArray(eventData.participants)
+        ? eventData.participants.filter(p => p && p.nama && String(p.nama).trim() !== '')
+        : [];
+
+      if (tournamentParticipants.length < 2) {
+        return res({ status: 'error', message: 'Minimal 2 peserta untuk membuat turnamen' });
+      }
     }
 
     const apiKey = PropertiesService.getScriptProperties().getProperty('CHALLONGE_API_KEY');
     if (!apiKey) {
       return res({ status: 'error', message: 'Challonge API Key belum di-set di Script Properties GAS' });
     }
-
-    const format = String(payload.format || 'weekly').toLowerCase();
-    const isFinal = format === 'final';
 
     const safeUrl = 'lalapan_bey_' + eventId + '_' + Date.now();
 
@@ -4953,7 +4971,7 @@ function generateTournament(payload) {
     const tournamentId = createRes.data.id;
     const challongeUrl = 'https://challonge.com/' + createRes.data.attributes.url;
 
-    const validParticipants = eventData.participants.filter(p => p && p.nama && String(p.nama).trim() !== '');
+    const validParticipants = tournamentParticipants;
     const mappingPromises = [];
     for (const participant of validParticipants) {
       const pRes = challongeFetch('post', '/tournaments/' + tournamentId + '/participants.json', {
@@ -4974,6 +4992,13 @@ function generateTournament(payload) {
 
     if (mappingPromises.length > 0) {
       saveTournamentParticipantMapping(eventId, tournamentId, mappingPromises);
+    }
+
+    if (!isFinal) {
+      const randomizeRes = challongeFetch('post', '/tournaments/' + tournamentId + '/participants/randomize.json');
+      if (randomizeRes.__error) {
+        return res({ status: 'error', message: 'Turnamen dibuat tapi gagal mengacak peserta (HTTP ' + randomizeRes.code + '): ' + randomizeRes.text });
+      }
     }
 
     const startRes = challongeFetch('put', '/tournaments/' + tournamentId + '/change_state.json', {
@@ -5048,6 +5073,161 @@ function generateTournament(payload) {
 // Flow: create -> add participants -> simpan challonge_url/id/state/created_at -> success.
 // Tidak memanggil start (admin akan start via tombol terpisah).
 // ============================================
+
+/**
+ * Ambil 16 seed FINAL dari Leaderboard bulan berjalan.
+ *
+ * Sumber ranking:
+ *   Leaderboard (sheet aktif saat ini)
+ *   -> Point DESC
+ *   -> Point Finish DESC
+ *
+ * Attendance TIDAK dipakai untuk menentukan seed FINAL.
+ * Attendance tetap hanya untuk status kehadiran pada halaman event.
+ */
+function getFinalSeedParticipants_(limit) {
+  const maxPlayers = Number(limit || 16);
+
+  const boardSheet = SS.getSheetByName('Leaderboard');
+  const playerSheet = SS.getSheetByName('Players');
+
+  if (!boardSheet) {
+    return { status: 'error', message: 'Sheet Leaderboard tidak ditemukan' };
+  }
+
+  if (!playerSheet) {
+    return { status: 'error', message: 'Sheet Players tidak ditemukan' };
+  }
+
+  const boardValues = boardSheet.getDataRange().getDisplayValues();
+  if (boardValues.length < 2) {
+    return { status: 'error', message: 'Leaderboard kosong' };
+  }
+
+  const boardHeaders = boardValues[0];
+  const boardRows = boardValues.slice(1);
+  const boardMap = {};
+
+  boardHeaders.forEach((h, i) => {
+    boardMap[String(h || '').toLowerCase().trim()] = i;
+  });
+
+  const idCol = boardMap['google_id'] !== undefined
+    ? boardMap['google_id']
+    : boardMap['googleid'];
+
+  const pointCol = boardMap['point'];
+  const pointFinishCol = boardMap['point_finish'] !== undefined
+    ? boardMap['point_finish']
+    : boardMap['pointfinish'];
+
+  if (idCol === undefined || pointCol === undefined || pointFinishCol === undefined) {
+    return {
+      status: 'error',
+      message: 'Header Leaderboard harus memiliki google_id, point, dan point_finish'
+    };
+  }
+
+  const playerValues = playerSheet.getDataRange().getDisplayValues();
+  if (playerValues.length < 2) {
+    return { status: 'error', message: 'Players kosong' };
+  }
+
+  const playerHeaders = playerValues[0];
+  const playerRows = playerValues.slice(1);
+  const playerMap = {};
+
+  playerHeaders.forEach((h, i) => {
+    playerMap[String(h || '').toLowerCase().trim()] = i;
+  });
+
+  const playerIdCol = playerMap['google_id'] !== undefined
+    ? playerMap['google_id']
+    : playerMap['googleid'];
+
+  const nicknameCol = playerMap['nickname'] !== undefined
+    ? playerMap['nickname']
+    : playerMap['nama'];
+
+  const photoCol = playerMap['photo_url'] !== undefined
+    ? playerMap['photo_url']
+    : (
+        playerMap['foto'] !== undefined
+          ? playerMap['foto']
+          : playerMap['photo']
+      );
+
+  if (playerIdCol === undefined || nicknameCol === undefined) {
+    return {
+      status: 'error',
+      message: 'Header Players harus memiliki google_id dan nickname'
+    };
+  }
+
+  const playerById = {};
+  playerRows.forEach(row => {
+    const googleId = String(row[playerIdCol] || '').trim();
+    const nickname = String(row[nicknameCol] || '').trim();
+
+    if (!googleId || !nickname) return;
+
+    playerById[googleId] = {
+      googleId: googleId,
+      nickname: nickname,
+      foto: photoCol !== undefined ? String(row[photoCol] || '').trim() : ''
+    };
+  });
+
+  const ranked = [];
+
+  boardRows.forEach(row => {
+    const googleId = String(row[idCol] || '').trim();
+    if (!googleId) return;
+
+    const player = playerById[googleId];
+    if (!player) return;
+
+    ranked.push({
+      googleId: googleId,
+      nickname: player.nickname,
+      foto: player.foto,
+      point: Number(row[pointCol]) || 0,
+      pointFinish: Number(row[pointFinishCol]) || 0
+    });
+  });
+
+  ranked.sort((a, b) => {
+    if (b.point !== a.point) return b.point - a.point;
+    if (b.pointFinish !== a.pointFinish) return b.pointFinish - a.pointFinish;
+    return a.googleId.localeCompare(b.googleId);
+  });
+
+  const selected = ranked.slice(0, maxPlayers);
+
+  if (selected.length < maxPlayers) {
+    return {
+      status: 'error',
+      message:
+        'Final membutuhkan ' + maxPlayers +
+        ' pemain valid di Leaderboard. Saat ini hanya tersedia ' +
+        selected.length + '.',
+      required: maxPlayers,
+      available: selected.length
+    };
+  }
+
+  return {
+    status: 'success',
+    participants: selected.map((p, index) => ({
+      googleId: p.googleId,
+      nama: p.nickname,
+      foto: p.foto,
+      seed: index + 1,
+      leaderboardRank: index + 1
+    }))
+  };
+}
+
 function createTournament(data) {
   try {
     const eventId = String(data.eventId);
@@ -5065,8 +5245,46 @@ function createTournament(data) {
       return res({ status: 'success', challongeUrl: eventData.event.challongeUrl, challongeId: '', challongeState: 'pending', alreadyGenerated: true });
     }
 
-    if (!eventData.participants || eventData.participants.length < 2) {
-      return res({ status: 'error', message: 'Minimal 2 peserta untuk membuat turnamen' });
+    const formatRaw = String(data.format || 'weekly').toLowerCase().trim();
+    const isFinal = formatRaw.indexOf('double') !== -1 || formatRaw.indexOf('final') !== -1;
+
+    let tournamentParticipants = [];
+
+    if (isFinal) {
+      const finalSeedResult = getFinalSeedParticipants_(16);
+      if (finalSeedResult.status !== 'success') {
+        return res(finalSeedResult);
+      }
+
+      tournamentParticipants = finalSeedResult.participants;
+
+      Logger.log(
+        '[FINAL SEEDING] ' +
+        tournamentParticipants
+          .map(p => '#' + p.seed + ' ' + p.nama)
+          .join(' | ')
+      );
+    } else {
+      const attendanceParticipants = Array.isArray(eventData.participants)
+        ? eventData.participants.filter(
+            p => p && p.nama && String(p.nama).trim() !== ''
+          )
+        : [];
+
+      if (attendanceParticipants.length < 2) {
+        return res({
+          status: 'error',
+          message: 'Minimal 2 peserta untuk membuat turnamen'
+        });
+      }
+
+      tournamentParticipants = attendanceParticipants.map((p, index) => ({
+        googleId: String(p.googleId || '').trim(),
+        nama: String(p.nama || '').trim(),
+        foto: String(p.foto || '').trim(),
+        seed: index + 1,
+        leaderboardRank: null
+      }));
     }
 
     const apiKey = PropertiesService.getScriptProperties().getProperty('CHALLONGE_API_KEY');
@@ -5079,8 +5297,6 @@ function createTournament(data) {
     // require_team_registration / auto_start / custom_theme (semua NOT SUPPORTED).
     // Frontend kirim format: "weekly" | "final" (atau "swiss" | "double elimination").
     // Default swiss/weekly jika kosong.
-    const formatRaw = String(data.format || 'weekly').toLowerCase();
-    const isFinal = formatRaw.indexOf('double') !== -1 || formatRaw.indexOf('final') !== -1;
     const tournamentType = isFinal ? 'double elimination' : 'swiss';
     const baseName = eventData.event.nama + ' - Liga ' + new Date().getFullYear() + (isFinal ? ' (Final)' : ' (Weekly)');
 
@@ -5142,7 +5358,7 @@ function createTournament(data) {
     const createdAt = new Date();
 
     // 2. ADD PARTICIPANTS (v2.1, JSON:API)
-    const validParticipants = eventData.participants.filter(p => p && p.nama && String(p.nama).trim() !== '');
+    const validParticipants = tournamentParticipants;
     const mappingPromises = [];
     for (const participant of validParticipants) {
       const pRes = challongeFetch('post', '/tournaments/' + tournamentId + '/participants.json', {
@@ -5165,10 +5381,12 @@ function createTournament(data) {
       saveTournamentParticipantMapping(eventId, tournamentId, mappingPromises);
     }
 
-    // 3. RANDOMIZE + START TOURNAMENT + SET tournament_status = running
-    const randomizeRes = challongeFetch('post', '/tournaments/' + tournamentId + '/participants/randomize.json');
-    if (randomizeRes.__error) {
-      return res({ status: 'error', message: 'Turnamen dibuat tapi gagal mengacak peserta (HTTP ' + randomizeRes.code + '): ' + randomizeRes.text });
+    // 3. WEEKLY diacak; FINAL mempertahankan seed dari Leaderboard.
+    if (!isFinal) {
+      const randomizeRes = challongeFetch('post', '/tournaments/' + tournamentId + '/participants/randomize.json');
+      if (randomizeRes.__error) {
+        return res({ status: 'error', message: 'Turnamen dibuat tapi gagal mengacak peserta (HTTP ' + randomizeRes.code + '): ' + randomizeRes.text });
+      }
     }
 
     const startRes = challongeFetch('put', '/tournaments/' + tournamentId + '/change_state.json', {
@@ -5257,7 +5475,11 @@ function createTournament(data) {
       challongeId: tournamentId,
       challongeState: 'started',
       tournament_status: 'running',
-      createdAt: createdAt
+      createdAt: createdAt,
+      format: isFinal ? 'final' : 'weekly',
+      randomized: !isFinal,
+      seededFromLeaderboard: isFinal,
+      participants: tournamentParticipants
     });
 
   } catch (err) {
