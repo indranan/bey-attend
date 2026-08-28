@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import Cropper from 'react-easy-crop';
 import toast from 'react-hot-toast';
 import { getCroppedImg } from '../utils/cropImage';
@@ -51,51 +52,61 @@ const PhotoUploader = ({ onCropped, isSubmitting }) => {
         GANTI FOTO
       </button>
 
-      {imageSrc && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="w-full max-w-sm bg-white dark:bg-dark-card rounded-[2rem] overflow-hidden shadow-2xl">
-            <div className="relative h-72 bg-black">
-              <Cropper
-                image={imageSrc}
-                crop={crop}
-                zoom={zoom}
-                aspect={1}
-                onCropChange={setCrop}
-                onZoomChange={setZoom}
-                onCropComplete={onCropComplete}
-              />
-            </div>
-            <div className="p-4 space-y-4">
-              <input
-                type="range"
-                min={1}
-                max={3}
-                step={0.05}
-                value={zoom}
-                onChange={(e) => setZoom(Number(e.target.value))}
-                className="w-full accent-primary"
-              />
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setImageSrc(null)}
-                  className="flex-1 py-3 rounded-2xl bg-gray-200 dark:bg-gray-700 font-black text-xs"
-                >
-                  Batal
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSave}
-                  disabled={isSubmitting}
-                  className="flex-1 py-3 rounded-2xl bg-primary dark:text-white font-black text-xs disabled:opacity-50"
-                >
-                  {isSubmitting ? 'Mengunggah...' : 'Simpan Foto'}
-                </button>
+      {imageSrc &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div className="fixed inset-0 z-[9999] flex min-h-screen items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+            <div className="w-full max-w-sm max-h-[90vh] bg-white dark:bg-dark-card rounded-[2rem] overflow-hidden shadow-2xl">
+
+              <div className="relative h-72 bg-black">
+                <Cropper
+                  image={imageSrc}
+                  crop={crop}
+                  zoom={zoom}
+                  aspect={1}
+                  onCropChange={setCrop}
+                  onZoomChange={setZoom}
+                  onCropComplete={onCropComplete}
+                />
+              </div>
+
+              <div className="p-4 space-y-4">
+                <input
+                  type="range"
+                  min={1}
+                  max={3}
+                  step={0.05}
+                  value={zoom}
+                  onChange={(e) => setZoom(Number(e.target.value))}
+                  className="w-full accent-primary"
+                />
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setImageSrc(null);
+                      setCropPixels(null);
+                    }}
+                    className="flex-1 py-3 rounded-2xl bg-gray-200 dark:bg-gray-700 font-black text-xs"
+                  >
+                    Batal
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleSave}
+                    disabled={isSubmitting}
+                    className="flex-1 py-3 rounded-2xl bg-primary dark:text-white font-black text-xs disabled:opacity-50"
+                  >
+                    {isSubmitting ? 'Mengunggah...' : 'Simpan Foto'}
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body
+        )}
     </div>
   );
 };
