@@ -44,6 +44,7 @@ export default function BladerProfilePage() {
       try {
         const res = await getBladerProfile(profileId);
         if (res?.status === 'success') {
+          console.log('[BLADER PROFILE] activeDecks:', res?.activeDecks);
           setProfile(res);
         } else {
           setProfile(null);
@@ -307,7 +308,13 @@ export default function BladerProfilePage() {
             <h3 className="mt-1 text-xl font-black uppercase italic text-white">Combo Deck</h3>
             <p className="text-[10px] font-bold uppercase tracking-widest text-gray-500 mt-1">3 deck aktif terakhir milik blader ini</p>
           </div>
-          <PublicDeckShowcase decks={Array.isArray(profile.decks) ? profile.decks.slice(0, 3) : []} />
+          <PublicDeckShowcase
+            decks={
+              Array.isArray(profile?.activeDecks)
+                ? profile.activeDecks.slice(0, 3)
+                : []
+            }
+          />
         </motion.div>
       </div>
     </div>

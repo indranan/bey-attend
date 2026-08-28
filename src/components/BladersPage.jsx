@@ -9,6 +9,7 @@ import {
   Users,
 } from 'lucide-react';
 import PublicNavbar from './PublicNavbar';
+import UserAvatar from './UserAvatar';
 import { getFromGas } from '../utils/api';
 import toast from 'react-hot-toast';
 
@@ -365,17 +366,11 @@ export default function BladersPage() {
                 >
                   {/* PHOTO */}
                   <div className="mb-4">
-                    {blader.foto ? (
-                      <img
-                        src={blader.foto}
-                        alt={blader.nickname}
-                        className="w-20 h-20 rounded-full object-cover border-2 border-white/10"
-                      />
-                    ) : (
-                      <div className="w-20 h-20 rounded-full bg-gray-800 border-2 border-white/10 flex items-center justify-center text-gray-400">
-                        <Users size={32} />
-                      </div>
-                    )}
+                    <UserAvatar
+                      src={blader.foto}
+                      name={blader.nickname}
+                      className="w-20 h-20 rounded-full border-2 border-white/10"
+                    />
                   </div>
 
                   {/* ROLE */}
