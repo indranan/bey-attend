@@ -99,6 +99,7 @@ export default function EventDetailPage() {
   const participants = Array.isArray(eventDetail?.participants) ? eventDetail.participants : [];
   const count = Number(eventDetail?.count || 0);
   const results = Array.isArray(eventDetail?.results) ? eventDetail.results : [];
+  const matchups = Array.isArray(eventDetail?.matchups) ? eventDetail.matchups : [];
   const isMatch = event && String(event.id) === String(id);
 
   if (loading) {
@@ -475,6 +476,59 @@ export default function EventDetailPage() {
                 <ExternalLink size={18} />
                 Open Challonge
               </motion.a>
+            </div>
+          </motion.div>
+        )}
+
+        {/* Matchups */}
+        {matchups.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 30 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.19 }}
+            className="mb-10"
+          >
+            <div className="bg-gray-900/80 backdrop-blur-sm rounded-[2.5rem] border border-white/5 p-6 md:p-8">
+              <div className="flex items-center justify-between gap-4 mb-6">
+                <div>
+                  <h3 className="text-sm font-black uppercase italic tracking-tight">Matchups</h3>
+                  <p className="text-[9px] text-gray-500 font-black uppercase tracking-widest mt-1">
+                    Pairing pemain dari bracket tournament
+                  </p>
+                </div>
+                <span className="text-[9px] font-black text-blue-400 uppercase tracking-widest">
+                  {matchups.length} Matches
+                </span>
+              </div>
+
+              <div className="space-y-3">
+                {matchups.map((m) => {
+                  const isLower = Number(m.round) < 0 || m.bracket === 'LOWER';
+                  const completed = m.is_completed || m.state === 'complete' || m.state === 'completed';
+                  return (
+                    <div
+                      key={m.match_id}
+                      className={`rounded-2xl border p-4 md:p-5 ${completed ? 'border-emerald-500/20 bg-emerald-500/5' : 'border-white/5 bg-white/[0.02]'}`}
+                    >
+                      <div className="flex items-center justify-between gap-3 mb-3">
+                        <span className={`text-[9px] font-black uppercase tracking-widest ${isLower ? 'text-orange-400' : 'text-blue-400'}`}>
+                          {isLower ? `LOWER BRACKET ${Math.abs(Number(m.round) || 1)}` : `ROUND ${m.round || 1}`}
+                          {m.display_match_number ? ` • MATCH ${m.display_match_number}` : ''}
+                        </span>
+                        <span className={`text-[8px] font-black uppercase tracking-widest ${completed ? 'text-emerald-400' : 'text-gray-600'}`}>
+                          {completed ? 'COMPLETED' : 'OPEN'}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
+                        <p className="min-w-0 text-sm md:text-base font-black text-white truncate text-right">{m.player1_name}</p>
+                        <span className="text-[9px] font-black italic text-red-400">VS</span>
+                        <p className="min-w-0 text-sm md:text-base font-black text-white truncate">{m.player2_name}</p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </motion.div>
         )}

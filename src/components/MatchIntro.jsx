@@ -61,7 +61,12 @@ const introConfig = {
   },
 };
 
-export default function MatchIntro({ show, onFinish, audioSrc = '/suara-announcer.mp3' }) {
+export default function MatchIntro({
+  show,
+  onFinish,
+  audioSrc = '/suara-announcer.mp3',
+  visualDelayMs = 0,
+}) {
   const [phase, setPhase] = useState(null);
 
   useEffect(() => {
@@ -70,37 +75,47 @@ export default function MatchIntro({ show, onFinish, audioSrc = '/suara-announce
       return;
     }
 
+    // Bluetooth mode: audio tetap diputar pada timeline normal.
+    // Yang digeser adalah timeline VISUAL agar mengikuti latency speaker Bluetooth.
+    const delay = Math.max(0, Number(visualDelayMs) || 0);
+
     setPhase('STANDBY');
 
     const timers = [];
+
+    // Audio tetap mulai pada 2500ms.
     timers.push(
       setTimeout(() => {
         try {
           const audio = new Audio(audioSrc);
           audio.play().catch(() => {});
         } catch (e) {
+          // Abaikan kegagalan audio; timeline visual tetap berjalan.
         }
-        setPhase('READY');
       }, 2500)
     );
-    timers.push(setTimeout(() => setPhase(null), 3300));
-    timers.push(setTimeout(() => setPhase('3'), 3500));
-    timers.push(setTimeout(() => setPhase('2'), 4300));
-    timers.push(setTimeout(() => setPhase('1'), 5100));
-    timers.push(setTimeout(() => setPhase('GO'), 6200));
-    timers.push(setTimeout(() => setPhase('SHOOT'), 7450));
-    timers.push(setTimeout(() => setPhase('FADEOUT'), 9050));
+
+    // Semua perubahan visual mulai setelah audio + visual delay.
+    timers.push(setTimeout(() => setPhase('READY'), 2500 + delay));
+    timers.push(setTimeout(() => setPhase(null), 3300 + delay));
+    timers.push(setTimeout(() => setPhase('3'), 3500 + delay));
+    timers.push(setTimeout(() => setPhase('2'), 4300 + delay));
+    timers.push(setTimeout(() => setPhase('1'), 5100 + delay));
+    timers.push(setTimeout(() => setPhase('GO'), 6200 + delay));
+    timers.push(setTimeout(() => setPhase('SHOOT'), 7450 + delay));
+    timers.push(setTimeout(() => setPhase('FADEOUT'), 9050 + delay));
+
     timers.push(
       setTimeout(() => {
         setPhase(null);
         if (typeof onFinish === 'function') onFinish();
-      }, 9350)
+      }, 9350 + delay)
     );
 
     return () => {
       timers.forEach((t) => clearTimeout(t));
     };
-  }, [show, audioSrc, onFinish]);
+  }, [show, audioSrc, onFinish, visualDelayMs]);
 
   return (
     <AnimatePresence>

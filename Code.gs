@@ -27,6 +27,136 @@ function getOrCreateSheet(sheetName, headers) {
   return sheet;
 }
 
+// ============================================================
+// TEMPORARY TOURNAMENT MATCH MAP
+// Menyimpan nomor match yang konsisten dengan Challonge
+// (suggested_play_order) berdasarkan match_id.
+// Sheet ini hanya hidup selama tournament berjalan.
+// ============================================================
+function getTempMatchMapSheetName(eventId) {
+  const safe = String(eventId || '').trim().replace(/[^A-Za-z0-9_-]/g, '_');
+  return 'TMP_MATCHMAP_' + (safe || 'UNKNOWN');
+}
+
+function ensureTempMatchMapSheet(eventId, tournamentId) {
+  const name = getTempMatchMapSheetName(eventId);
+  const headers = [
+    'event_id',
+    'tournament_id',
+    'match_id',
+    'display_match_number',
+    'round',
+    'player1_id',
+    'player2_id',
+    'state',
+    'updated_at'
+  ];
+  return getOrCreateSheet(name, headers);
+}
+
+function findEventIdByTournamentId(tournamentId) {
+  const eventSheet = SS.getSheetByName('Events');
+  if (!eventSheet) return '';
+  const values = eventSheet.getDataRange().getValues();
+  if (values.length < 2) return '';
+  const map = getHeaderMap(eventSheet);
+  const eventIdCol = map['event_id'] !== undefined ? map['event_id'] : map['id'];
+  const tournamentIdCol = map['challonge_id'] !== undefined ? map['challonge_id'] : map['challongeid'];
+  if (eventIdCol === undefined || tournamentIdCol === undefined) return '';
+
+  for (let i = 1; i < values.length; i++) {
+    if (String(values[i][tournamentIdCol] || '').trim() === String(tournamentId || '').trim()) {
+      return String(values[i][eventIdCol] || '').trim();
+    }
+  }
+  return '';
+}
+
+function upsertTempMatchMap(eventId, tournamentId, matchesRaw) {
+  if (!eventId || !tournamentId) return;
+  try {
+    const sheet = ensureTempMatchMapSheet(eventId, tournamentId);
+    const existing = sheet.getDataRange().getValues();
+    const rowMap = {};
+    for (let i = 1; i < existing.length; i++) {
+      const matchId = String(existing[i][2] || '').trim();
+      if (matchId) rowMap[matchId] = i + 1;
+    }
+
+    const appendRows = [];
+    const now = new Date();
+
+    (matchesRaw || []).forEach((m, index) => {
+      const attrs = m.attributes || {};
+      const points = attrs.points_by_participant || [];
+      const matchId = String(m.id || '').trim();
+      if (!matchId) return;
+
+      const spo = Number(attrs.suggested_play_order);
+      const displayMatchNumber = Number.isFinite(spo) && spo > 0 ? spo : (index + 1);
+
+      const row = [
+        String(eventId),
+        String(tournamentId),
+        matchId,
+        displayMatchNumber,
+        Number(attrs.round || 0),
+        points.length > 0 ? String(points[0].participant_id || '') : '',
+        points.length > 1 ? String(points[1].participant_id || '') : '',
+        String(attrs.state || ''),
+        now
+      ];
+
+      if (rowMap[matchId]) {
+        sheet.getRange(rowMap[matchId], 1, 1, row.length).setValues([row]);
+      } else {
+        appendRows.push(row);
+      }
+    });
+
+    if (appendRows.length) {
+      sheet.getRange(sheet.getLastRow() + 1, 1, appendRows.length, appendRows[0].length).setValues(appendRows);
+    }
+  } catch (err) {
+    console.error('[TEMP MATCHMAP] upsert failed: ' + err.message);
+  }
+}
+
+function getTempMatchNumberMap(eventId) {
+  const map = {};
+  if (!eventId) return map;
+  try {
+    const sheet = SS.getSheetByName(getTempMatchMapSheetName(eventId));
+    if (!sheet) return map;
+    const values = sheet.getDataRange().getValues();
+    for (let i = 1; i < values.length; i++) {
+      const matchId = String(values[i][2] || '').trim();
+      const displayNumber = Number(values[i][3]);
+      if (matchId && Number.isFinite(displayNumber) && displayNumber > 0) {
+        map[matchId] = displayNumber;
+      }
+    }
+  } catch (err) {
+    console.error('[TEMP MATCHMAP] read failed: ' + err.message);
+  }
+  return map;
+}
+
+function deleteTempMatchMapSheet(eventId) {
+  try {
+    const name = getTempMatchMapSheetName(eventId);
+    const sheet = SS.getSheetByName(name);
+    if (sheet) {
+      SS.deleteSheet(sheet);
+      Logger.log('[TEMP MATCHMAP] deleted ' + name);
+      return true;
+    }
+  } catch (err) {
+    console.error('[TEMP MATCHMAP] delete failed: ' + err.message);
+  }
+  return false;
+}
+
 function normalizeId(value) {
   return String(value ?? '').trim();
 }
@@ -520,16 +650,15 @@ function doGet(e) {
       case 'getBlader': return getBlader(googleId);
       case 'getBladers': return getBladers();
       case 'checkNickname': return checkNickname(nickname);
-        case 'getEvent': return res(fetchActiveEvent());
-        case 'getEvents': return getEvents();
-        case 'getEventDetail': return getEventDetail(e.parameter.eventId);
-        case 'getSettings': return getSettings();
-        case 'getRule': return getRule();
-        case 'getRules': return getRules();
-        case 'getRuleById': return getRuleById(e.parameter.ruleId);
-        case 'migrateEventsToNewSchema': return migrateEventsToNewSchema();
+      case 'getEvent': return res(fetchActiveEvent());
+      case 'getEvents': return getEvents();
+      case 'getEventDetail': return getEventDetail(e.parameter.eventId);
+      case 'getSettings': return getSettings();
+      case 'getRule': return getRule();
+      case 'getRules': return getRules();
+      case 'getRuleById': return getRuleById(e.parameter.ruleId);
+      case 'migrateEventsToNewSchema': return migrateEventsToNewSchema();
       case 'getLeaderboard': return getLeaderboard();
-      case 'getActiveDecksByGoogleId': return res(getPublicDecksByGoogleId_(e.parameter.googleId, 3));
       case 'getOpenMatches': return getOpenMatches(e.parameter.tournament_url);
       case 'getActiveEvent': return getActiveEvent();
       case 'findTournamentResultSheet': return res(findTournamentResultSheet(e.parameter.eventId));
@@ -555,7 +684,6 @@ function doPost(e) {
       case 'createProfile': return createProfile(data);
       case 'updateNickname': return updateNickname(data);
       case 'attendance': return postAttendance(data);
-      case 'repairAttendanceNicknames': return repairAttendanceNicknames();
       case 'createEvent': return createEvent(data);
       case 'resetArena': return resetArena();
       case 'startEvent': return startEvent(data);
@@ -566,15 +694,15 @@ function doPost(e) {
       case 'updateBio': return updateBio(data);
       case 'uploadProfilePhoto': return uploadProfilePhoto(data);
       case 'updatePoints': return updatePoints(data);
-       case 'toggleNicknameSetting': return toggleNicknameSetting();
-       case 'saveRule': return saveRule(data);
-       case 'submitMatchScore': return submitMatchScore(data);
-       case 'startTournament': return startTournament(data);
-       case 'startTournamentStatus': return startTournamentStatus(data);
-       case 'finishTournamentStatus': return finishTournamentStatus(data);
-        case 'randomizeParticipants': return randomizeParticipants(data);
-       case 'updateSwissRounds': return updateSwissRounds(data);
-       case 'createTournament': return createTournament(data);
+      case 'toggleNicknameSetting': return toggleNicknameSetting();
+      case 'saveRule': return saveRule(data);
+      case 'submitMatchScore': return submitMatchScore(data);
+      case 'startTournament': return startTournament(data);
+      case 'startTournamentStatus': return startTournamentStatus(data);
+      case 'finishTournamentStatus': return finishTournamentStatus(data);
+      case 'randomizeParticipants': return randomizeParticipants(data);
+      case 'updateSwissRounds': return updateSwissRounds(data);
+      case 'createTournament': return createTournament(data);
       case 'finishTournament': return finishTournament(data);
       case 'exportStandings': return exportStandings(data);
       case 'getBladerProfile': return getBladerProfile(data);
@@ -589,8 +717,6 @@ function doPost(e) {
       case 'migratePublicProfileIds': return ensurePublicProfileId(SS.getSheetByName("Players"));
       case 'getBeybladeParts': return getBeybladeParts();
       case 'getMyDecks': return getMyDecks(data);
-      case 'createBeybladePart': return createBeybladePart(data);
-      case 'toggleBeybladePart': return toggleBeybladePart(data);
       case 'createDeck': return createDeck(data);
       case 'updateDeck': return updateDeck(data);
       case 'deleteDeck': return deleteDeck(data);
@@ -791,14 +917,8 @@ function getEventDetail(eventId) {
   }
 
   let results = [];
-
-  // Gunakan Event ID untuk menemukan sheet hasil.
-  // findTournamentResultSheet() memiliki fallback berdasarkan nama event.
-  const resultSheetName = findTournamentResultSheet(id);
-  const resultSheet = resultSheetName
-    ? SS.getSheetByName(resultSheetName)
-    : null;
-
+  const sheetName = event.nama.trim();
+  const resultSheet = SS.getSheetByName(sheetName);
   if (resultSheet) {
     const resultValues = resultSheet.getDataRange().getDisplayValues();
     if (resultValues.length >= 3) {
@@ -809,7 +929,7 @@ function getEventDetail(eventId) {
       });
 
       if (resultMap['nama'] === undefined) {
-        console.error('getEventDetail: header Nama tidak ditemukan di sheet ' + resultSheetName + ' headers=' + JSON.stringify(resultMap));
+        console.error('getEventDetail: header Nama tidak ditemukan di sheet ' + sheetName + ' headers=' + JSON.stringify(resultMap));
       } else {
         const isNewFormat = resultMap['google_id'] !== undefined || resultMap['google id'] !== undefined;
         const rankIdx = resultMap['rank'];
@@ -956,7 +1076,7 @@ function getTournamentResultSheetIndex() {
   const cache = CacheService.getScriptCache();
   const cacheKey = 'tournamentResultSheetIndex';
   const cached = cache.get(cacheKey);
-  
+
   if (cached) {
     try {
       return JSON.parse(cached);
@@ -990,7 +1110,7 @@ function findTournamentResultSheet(eventId) {
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheets = ss.getSheets();
-  
+
   let eventName = '';
   try {
     const eventSheet = SS.getSheetByName("Events");
@@ -1016,29 +1136,29 @@ function findTournamentResultSheet(eventId) {
   } catch (e) {
     console.error('Gagal baca event name untuk findTournamentResultSheet: ' + e.message);
   }
-  
+
   const skipSheets = ['Events', 'Players', 'Attendance', 'Leaderboard', 'Rules', 'Settings', 'TEMPLATE', 'TournamentParticipants', 'TournamentLeaderboardSync'];
-  
+
   for (const sheet of sheets) {
     const sheetName = sheet.getName();
     if (skipSheets.indexOf(sheetName) >= 0) continue;
-    
+
     const values = sheet.getDataRange().getDisplayValues();
     if (values.length < 3) continue;
-    
+
     const row1 = values[0];
     const row2 = values[1];
     const row2Headers = row2.map(h => String(h || '').toLowerCase().trim());
-    
+
     const hasKlasemen = row1.some(cell => String(cell || '').toLowerCase().trim() === 'klasemen');
     const hasRank = row2Headers.indexOf('rank') >= 0;
     const hasPoint = row2Headers.indexOf('point') >= 0;
     const hasNama = row2Headers.indexOf('nama') >= 0;
-    
+
     if (!hasKlasemen || !hasRank || !hasPoint || !hasNama) continue;
-    
+
     const eventIdCol = row2Headers.indexOf('event id');
-    
+
     if (eventIdCol >= 0) {
       for (let i = 2; i < values.length; i++) {
         const rowEventId = String(values[i][eventIdCol] || '').trim();
@@ -1050,7 +1170,7 @@ function findTournamentResultSheet(eventId) {
       return sheetName;
     }
   }
-  
+
   return null;
 }
 
@@ -1243,9 +1363,20 @@ function getLeaderboard() {
     const finalData = entries.map((entry, index) => {
       const currentRank = index + 1;
       const pInfo = playerMap[entry.googleId] || { nickname: "Unknown Blader", foto: "", slogan: "", catatan: "" };
-      const status = ['up', 'down', 'stay', 'new'].includes(String(entry.status || '').toLowerCase())
-        ? String(entry.status).toLowerCase()
-        : 'stay';
+      let status = String(entry.status || '').toLowerCase().trim();
+      // Leaderboard sheet 'status' is the source of truth.
+      // Only derive it when the cell is empty for backward compatibility.
+      if (!status) {
+        if (entry.previousRank === null || entry.previousRank === undefined || String(entry.previousRank) === '') {
+          status = 'new';
+        } else if (entry.previousRank > currentRank) {
+          status = 'up';
+        } else if (entry.previousRank < currentRank) {
+          status = 'down';
+        } else {
+          status = 'stay';
+        }
+      }
 
       return {
         googleId: entry.googleId,
@@ -1327,222 +1458,6 @@ function generateShortDeckId() {
   return result;
 }
 
-function normalizeDeckPartType_(partType) {
-  const key = String(partType || '').trim().toUpperCase();
-  const aliases = {
-    'METAL BLADE': 'BLADE',
-    'MAIN BLADE': 'BLADE',
-    'BLADE': 'BLADE',
-    'OVER BLADE': 'OVER_BLADE',
-    'OVER_BLADE': 'OVER_BLADE',
-    'ASSIST BLADE': 'ASSIST_BLADE',
-    'ASSIST_BLADE': 'ASSIST_BLADE',
-    'LOCK CHIP': 'LOCK_CHIP',
-    'LOCK_CHIP': 'LOCK_CHIP',
-    'RATCHET': 'RATCHET',
-    'BIT': 'BIT'
-  };
-  return aliases[key] || key;
-}
-
-function ensureSheetColumn_(sheet, headerName) {
-  const lastCol = sheet.getLastColumn();
-  if (lastCol < 1) {
-    sheet.getRange(1, 1).setValue(headerName);
-    return 1;
-  }
-  const headers = sheet.getRange(1, 1, 1, lastCol).getDisplayValues()[0];
-  const target = String(headerName).toLowerCase().trim();
-  const existingIndex = headers.findIndex(h => String(h || '').toLowerCase().trim() === target);
-  if (existingIndex >= 0) return existingIndex + 1;
-  sheet.insertColumnAfter(lastCol);
-  sheet.getRange(1, lastCol + 1).setValue(headerName);
-  return lastCol + 1;
-}
-
-function getAdminEmails_() {
-  const adminSheet = SS.getSheetByName('Admins');
-  if (!adminSheet) return [];
-  return adminSheet.getDataRange().getDisplayValues().flat().map(v => String(v || '').trim().toLowerCase()).filter(Boolean);
-}
-
-function resolveAdminOwner_(data) {
-  const googleId = String(data?.googleId || '').trim();
-  if (!googleId) return { authorized: false, error: 'Unauthorized: googleId tidak diberikan' };
-  const playerSheet = SS.getSheetByName('Players');
-  if (!playerSheet) return { authorized: false, error: 'Sheet Players tidak ditemukan' };
-  const values = playerSheet.getDataRange().getDisplayValues();
-  if (values.length < 2) return { authorized: false, error: 'Data player tidak ditemukan' };
-  const headers = values[0].map(h => String(h || '').toLowerCase().trim());
-  const idCol = headers.indexOf('google_id') >= 0 ? headers.indexOf('google_id') : headers.indexOf('googleid');
-  const emailCol = headers.indexOf('email');
-  if (idCol < 0 || emailCol < 0) return { authorized: false, error: 'Kolom google_id/email tidak ditemukan di Players' };
-  const adminEmails = new Set(getAdminEmails_());
-  const row = values.slice(1).find(r => String(r[idCol] || '').trim() === googleId);
-  if (!row) return { authorized: false, error: 'Player tidak ditemukan' };
-  const email = String(row[emailCol] || '').trim().toLowerCase();
-  if (!adminEmails.has(email)) return { authorized: false, error: 'Akses admin ditolak' };
-  return { authorized: true, googleId, email };
-}
-
-function generateNextPartId_(sheet, partType) {
-  const prefixMap = {
-    'BLADE': 'BL',
-    'MAIN BLADE': 'BL',
-    'METAL BLADE': 'BL',
-    'OVER_BLADE': 'OB',
-    'OVER BLADE': 'OB',
-    'ASSIST_BLADE': 'AB',
-    'ASSIST BLADE': 'AB',
-    'LOCK_CHIP': 'LC',
-    'LOCK CHIP': 'LC',
-    'RATCHET': 'RT',
-    'BIT': 'BT'
-  };
-  const normalized = normalizeDeckPartType_(partType);
-  const prefix = prefixMap[normalized] || prefixMap[String(partType || '').toUpperCase().trim()];
-  if (!prefix) throw new Error('Part type tidak dikenali: ' + partType);
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return `${prefix}001`;
-  const ids = sheet.getRange(2, 1, lastRow - 1, 1).getDisplayValues().flat();
-  let max = 0;
-  ids.forEach(id => {
-    const value = String(id || '').trim().toUpperCase();
-    if (!value.startsWith(prefix)) return;
-    const n = parseInt(value.slice(prefix.length), 10);
-    if (!isNaN(n)) max = Math.max(max, n);
-  });
-  return `${prefix}${String(max + 1).padStart(3, '0')}`;
-}
-
-function createBeybladePart(data) {
-  const auth = resolveAdminOwner_(data);
-  if (!auth.authorized) return res({ status: 'error', message: auth.error });
-  const sheet = SS.getSheetByName('BeybladeParts');
-  if (!sheet) return res({ status: 'error', message: 'Sheet BeybladeParts tidak ditemukan' });
-  const partType = normalizeDeckPartType_(data.partType);
-  const allowed = ['BLADE', 'OVER_BLADE', 'ASSIST_BLADE', 'LOCK_CHIP', 'RATCHET', 'BIT'];
-  if (!allowed.includes(partType)) return res({ status: 'error', message: 'Part type tidak valid' });
-  const name = String(data.name || '').trim();
-  const system = String(data.system || 'ALL').toUpperCase().trim() || 'ALL';
-  if (!name) return res({ status: 'error', message: 'Nama part wajib diisi' });
-  const lock = LockService.getDocumentLock();
-  lock.waitLock(10000);
-  try {
-    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
-    const h = {}; headers.forEach((v, i) => { h[String(v || '').toLowerCase().trim()] = i; });
-    const row = new Array(Math.max(sheet.getLastColumn(), 6)).fill('');
-    const partId = generateNextPartId_(sheet, partType);
-    row[h['part_id']] = partId;
-    row[h['system']] = system;
-    row[h['part_type']] = partType;
-    row[h['name']] = name;
-    if (h['is_active'] !== undefined) row[h['is_active']] = String(data.isActive === false ? false : true).toUpperCase();
-    if (h['has_over_blade'] !== undefined) row[h['has_over_blade']] = asBoolean_(data.hasOverBlade) ? 'TRUE' : 'FALSE';
-    if (h['integrated_ratchet'] !== undefined) row[h['integrated_ratchet']] = asBoolean_(data.integratedRatchet) ? 'TRUE' : 'FALSE';
-    if (h['integrated_ratchet_bit'] !== undefined) row[h['integrated_ratchet_bit']] = asBoolean_(data.integratedRatchetBit) ? 'TRUE' : 'FALSE';
-    if (h['created_at'] !== undefined) row[h['created_at']] = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
-    sheet.appendRow(row);
-    return res({ status: 'success', partId, message: 'Part berhasil dibuat' });
-  } finally {
-    lock.releaseLock();
-  }
-}
-
-function toggleBeybladePart(data) {
-  const auth = resolveAdminOwner_(data);
-  if (!auth.authorized) return res({ status: 'error', message: auth.error });
-  const sheet = SS.getSheetByName('BeybladeParts');
-  if (!sheet) return res({ status: 'error', message: 'Sheet BeybladeParts tidak ditemukan' });
-  const partId = String(data.partId || '').trim();
-  const values = sheet.getDataRange().getDisplayValues();
-  const headers = values[0].map(h => String(h || '').toLowerCase().trim());
-  const idCol = headers.indexOf('part_id');
-  const activeCol = headers.indexOf('is_active');
-  if (idCol < 0 || activeCol < 0) return res({ status: 'error', message: 'Header BeybladeParts tidak lengkap' });
-  for (let i = 1; i < values.length; i++) {
-    if (String(values[i][idCol] || '').trim() === partId) {
-      sheet.getRange(i + 1, activeCol + 1).setValue(data.isActive === true ? 'TRUE' : 'FALSE');
-      return res({ status: 'success', message: 'Status part diperbarui' });
-    }
-  }
-  return res({ status: 'error', message: 'Part tidak ditemukan' });
-}
-
-
-function asBoolean_(value) {
-  if (typeof value === 'boolean') return value;
-  return ['true', '1', 'yes', 'y'].includes(String(value || '').trim().toLowerCase());
-}
-
-function validateDeckPartIds(data, partsMap) {
-  const system = String(data?.system || '').toUpperCase().trim();
-  const lockChip = String(data?.lockChip || '').trim();
-  const blade = String(data?.blade || '').trim();
-  const overBlade = String(data?.overBlade || '').trim();
-  const assistBlade = String(data?.assistBlade || '').trim();
-  const ratchet = String(data?.ratchet || '').trim();
-  const bit = String(data?.bit || '').trim();
-
-  const fail = (message) => ({ valid: false, message });
-  const validate = (partId, expectedType, allowedSystems) => {
-    if (!partId) return true;
-    const part = partsMap[partId];
-    if (!part || !part.isActive) return false;
-    if (normalizeDeckPartType_(part.partType) !== expectedType) return false;
-    if (allowedSystems && !allowedSystems.includes(String(part.system || '').toUpperCase().trim())) return false;
-    return true;
-  };
-
-  if (!['BX', 'UX', 'CX'].includes(system)) return fail('System harus BX, UX, atau CX');
-  if (!blade) return fail('Blade wajib diisi');
-  const bladePart = partsMap[blade];
-  if (!bladePart || !bladePart.isActive || normalizeDeckPartType_(bladePart.partType) !== 'BLADE') {
-    return fail('Blade tidak valid');
-  }
-  const bladeSystem = String(bladePart.system || '').toUpperCase().trim();
-  if (![system, 'ALL'].includes(bladeSystem)) return fail(`Blade tidak valid untuk ${system}`);
-
-  const rules = {
-    hasOverBlade: asBoolean_(bladePart.hasOverBlade),
-    integratedRatchet: asBoolean_(bladePart.integratedRatchet),
-    integratedRatchetBit: asBoolean_(bladePart.integratedRatchetBit),
-  };
-
-  if (system === 'CX') {
-    if (!validate(lockChip, 'LOCK_CHIP', ['CX'])) return fail('Lock Chip tidak valid untuk CX');
-    if (!validate(assistBlade, 'ASSIST_BLADE', ['CX'])) return fail('Assist Blade tidak valid untuk CX');
-  } else if (lockChip || assistBlade) {
-    return fail(`Lock Chip / Assist Blade hanya untuk CX`);
-  }
-
-  if (rules.hasOverBlade && system === 'CX') {
-    if (!overBlade) return fail('Blade ini membutuhkan Over Blade');
-    if (!validate(overBlade, 'OVER_BLADE', ['CX', 'ALL'])) return fail('Over Blade tidak valid untuk Blade ini');
-  } else if (overBlade) {
-    return fail('Over Blade hanya boleh dipakai pada Blade CX yang mendukung Over Blade');
-  }
-
-  if (rules.integratedRatchetBit) {
-    if (ratchet) return fail('Blade ini sudah memiliki Ratchet + Bit bawaan');
-    if (bit) return fail('Blade ini sudah memiliki Ratchet + Bit bawaan');
-  } else if (rules.integratedRatchet) {
-    if (ratchet) return fail('Blade ini sudah memiliki Ratchet bawaan');
-    if (!bit) return fail('Bit wajib diisi');
-    if (!validate(bit, 'BIT', ['ALL', system])) return fail(`Bit tidak valid untuk ${system}`);
-  } else {
-    if (!ratchet) return fail('Ratchet wajib diisi');
-    if (!validate(ratchet, 'RATCHET', ['ALL', system])) return fail(`Ratchet tidak valid untuk ${system}`);
-    if (!bit) return fail('Bit wajib diisi');
-    if (!validate(bit, 'BIT', ['ALL', system])) return fail(`Bit tidak valid untuk ${system}`);
-  }
-
-  return {
-    valid: true,
-    rules,
-  };
-}
-
 function getBeybladeParts() {
   const partSheet = SS.getSheetByName('BeybladeParts');
   if (!partSheet) return res({ status: 'success', parts: [] });
@@ -1566,22 +1481,16 @@ function getBeybladeParts() {
   const parts = rows.map(row => {
     const partId = partIdCol !== undefined ? String(row[partIdCol] || '').trim() : '';
     const system = systemCol !== undefined ? String(row[systemCol] || '').trim() : '';
-    const partType = partTypeCol !== undefined ? normalizeDeckPartType_(String(row[partTypeCol] || '').trim()) : '';
+    const partType = partTypeCol !== undefined ? String(row[partTypeCol] || '').trim() : '';
     const name = nameCol !== undefined ? String(row[nameCol] || '').trim() : '';
     const isActive = isActiveCol !== undefined ? String(row[isActiveCol] || '').toLowerCase().trim() === 'true' : true;
-    const hasOverBlade = headerMap['has_over_blade'] !== undefined ? asBoolean_(row[headerMap['has_over_blade']]) : false;
-    const integratedRatchet = headerMap['integrated_ratchet'] !== undefined ? asBoolean_(row[headerMap['integrated_ratchet']]) : false;
-    const integratedRatchetBit = headerMap['integrated_ratchet_bit'] !== undefined ? asBoolean_(row[headerMap['integrated_ratchet_bit']]) : false;
 
     return {
       partId,
       system,
       partType,
       name,
-      isActive,
-      hasOverBlade,
-      integratedRatchet,
-      integratedRatchetBit
+      isActive
     };
   }).filter(p => p.partId);
 
@@ -1615,7 +1524,7 @@ function getBeybladePartsMap() {
     const partId = partIdCol !== undefined ? String(row[partIdCol] || '').trim() : '';
     if (!partId) return;
     const system = systemCol !== undefined ? String(row[systemCol] || '').trim() : '';
-    const partType = partTypeCol !== undefined ? normalizeDeckPartType_(String(row[partTypeCol] || '').trim()) : '';
+    const partType = partTypeCol !== undefined ? String(row[partTypeCol] || '').trim() : '';
     const name = nameCol !== undefined ? String(row[nameCol] || '').trim() : '';
     const isActive = isActiveCol !== undefined ? String(row[isActiveCol] || '').toLowerCase().trim() === 'true' : true;
 
@@ -1629,10 +1538,7 @@ function getBeybladePartsMap() {
       system,
       partType,
       name,
-      isActive,
-      hasOverBlade: headerMap['has_over_blade'] !== undefined ? asBoolean_(row[headerMap['has_over_blade']]) : false,
-      integratedRatchet: headerMap['integrated_ratchet'] !== undefined ? asBoolean_(row[headerMap['integrated_ratchet']]) : false,
-      integratedRatchetBit: headerMap['integrated_ratchet_bit'] !== undefined ? asBoolean_(row[headerMap['integrated_ratchet_bit']]) : false
+      isActive
     };
   });
 
@@ -1646,32 +1552,27 @@ function getBeybladePartsMap() {
 function getMyDecks(data) {
   const auth = resolveDeckOwner(data);
   if (!auth.authorized) return res({ status: 'error', message: auth.error });
-  return res(getDecksByGoogleId_(auth.googleId, String(data?.filter || 'active').toLowerCase().trim(), null));
-}
 
-function getPublicDecksByGoogleId_(googleId, limit) {
-  const id = String(googleId || '').trim();
-  if (!id) return { status: 'success', decks: [] };
-  return getDecksByGoogleId_(id, 'active', Math.max(1, Math.min(Number(limit) || 3, 3)), true);
-}
-
-function getDecksByGoogleId_(googleId, filter, limit, publicMode) {
-  const userGoogleId = String(googleId || '').trim();
+  const userGoogleId = auth.googleId;
   const deckSheet = SS.getSheetByName('BladerDecks');
-  if (!deckSheet) return { status: 'success', decks: [], counts: { active: 0, reserve: 0, total: 0 } };
+  if (!deckSheet) return res({ status: 'success', decks: [] });
+
   const values = deckSheet.getDataRange().getDisplayValues();
-  if (values.length < 2) return { status: 'success', decks: [], counts: { active: 0, reserve: 0, total: 0 } };
+  if (values.length < 2) return res({ status: 'success', decks: [] });
+
   const headers = values[0];
   const rows = values.slice(1);
   const headerMap = {};
-  headers.forEach((h, i) => { headerMap[String(h || '').toLowerCase().trim()] = i; });
+  headers.forEach((h, i) => {
+    headerMap[String(h).toLowerCase().trim()] = i;
+  });
+
   const deckIdCol = headerMap['deck_id'];
   const googleIdCol = headerMap['google_id'];
   const deckNameCol = headerMap['deck_name'];
   const systemCol = headerMap['system'];
   const lockChipCol = headerMap['lock_chip'];
   const bladeCol = headerMap['blade'];
-  const overBladeCol = headerMap['over_blade'];
   const assistBladeCol = headerMap['assist_blade'];
   const ratchetCol = headerMap['ratchet'];
   const bitCol = headerMap['bit'];
@@ -1679,71 +1580,81 @@ function getDecksByGoogleId_(googleId, filter, limit, publicMode) {
   const isActiveCol = headerMap['is_active'];
   const createdAtCol = headerMap['created_at'];
   const updatedAtCol = headerMap['updated_at'];
+
   const partsMap = getBeybladePartsMap();
+
+  const filter = String(data?.filter || 'active').toLowerCase().trim();
+
+  const decks = [];
   let activeCount = 0;
   let reserveCount = 0;
-  const decks = [];
-
-  const resolvePart = (partId) => {
-    if (!partId) return null;
-    const part = partsMap[partId];
-    if (!part) return { partId, name: partId, partType: '', system: '' };
-    return {
-      partId: part.partId,
-      name: part.name,
-      partType: part.partType,
-      system: part.system,
-      hasOverBlade: !!part.hasOverBlade,
-      integratedRatchet: !!part.integratedRatchet,
-      integratedRatchetBit: !!part.integratedRatchetBit
-    };
-  };
 
   rows.forEach(row => {
     const rowGoogleId = googleIdCol !== undefined ? String(row[googleIdCol] || '').trim() : '';
     if (rowGoogleId !== userGoogleId) return;
+
     const deckId = deckIdCol !== undefined ? String(row[deckIdCol] || '').trim() : '';
     if (!deckId) return;
+
+    const lockChipId = lockChipCol !== undefined ? String(row[lockChipCol] || '').trim() : '';
+    const bladeId = bladeCol !== undefined ? String(row[bladeCol] || '').trim() : '';
+    const assistBladeId = assistBladeCol !== undefined ? String(row[assistBladeCol] || '').trim() : '';
+    const ratchetId = ratchetCol !== undefined ? String(row[ratchetCol] || '').trim() : '';
+    const bitId = bitCol !== undefined ? String(row[bitCol] || '').trim() : '';
+
+    const system = systemCol !== undefined ? String(row[systemCol] || '').trim() : '';
+    const isBxOrUx = system === 'BX' || system === 'UX';
     const isActive = isActiveCol !== undefined ? String(row[isActiveCol] || '').toLowerCase().trim() === 'true' : true;
-    if (isActive) activeCount++; else reserveCount++;
+
+    Logger.log('[DECK MATCH]', { deckId, googleId: rowGoogleId, isActive });
+
+    if (isActive) activeCount++;
+    else reserveCount++;
+
     if (filter === 'active' && !isActive) return;
     if (filter === 'reserve' && isActive) return;
-    const systemValue = systemCol !== undefined ? String(row[systemCol] || '').trim().toUpperCase() : '';
-    const bladeRawId = bladeCol !== undefined ? String(row[bladeCol] || '').trim() : '';
-    const bladeResolved = resolvePart(bladeRawId);
-    const bladeMeta = bladeRawId && partsMap[bladeRawId] ? partsMap[bladeRawId] : null;
-    const hasOverBlade = !!bladeMeta?.hasOverBlade;
-    const integratedRatchet = !!bladeMeta?.integratedRatchet;
-    const integratedRatchetBit = !!bladeMeta?.integratedRatchetBit;
 
-    const deck = {
+    const resolvePart = (partId, partType, expectedSystem) => {
+      if (!partId) return null;
+      const fromId = partsMap[partId];
+      if (fromId) {
+        Logger.log('[DECK PART RESOLVE]', { deckId, field: partType, partId, partType, system: expectedSystem, resolvedName: fromId.name });
+        return { partId: fromId.partId, name: fromId.name };
+      }
+      Logger.log('[DECK PART RESOLVE]', { deckId, field: partType, partId, partType, system: expectedSystem, resolvedName: partId });
+      Logger.log('[DECK PART IMAGE MISSING]', { deckId, partId, name: partId });
+      return { partId, name: partId };
+    };
+
+    decks.push({
       deckId,
       deckName: deckNameCol !== undefined ? String(row[deckNameCol] || '').trim() : '',
-      system: systemValue,
-      lockChip: lockChipCol !== undefined ? resolvePart(String(row[lockChipCol] || '').trim()) : null,
-      blade: bladeResolved,
-      overBlade: hasOverBlade && systemValue === 'CX' && overBladeCol !== undefined ? resolvePart(String(row[overBladeCol] || '').trim()) : null,
-      assistBlade: assistBladeCol !== undefined ? resolvePart(String(row[assistBladeCol] || '').trim()) : null,
-      ratchet: !integratedRatchet && !integratedRatchetBit && ratchetCol !== undefined ? resolvePart(String(row[ratchetCol] || '').trim()) : null,
-      bit: !integratedRatchetBit && bitCol !== undefined ? resolvePart(String(row[bitCol] || '').trim()) : null,
+      system,
+      lockChip: (!isBxOrUx && lockChipId) ? resolvePart(lockChipId, 'LOCK_CHIP', 'CX') : null,
+      blade: (bladeId) ? resolvePart(bladeId, 'BLADE', system) : null,
+      assistBlade: (!isBxOrUx && assistBladeId) ? resolvePart(assistBladeId, 'ASSIST_BLADE', 'CX') : null,
+      ratchet: (ratchetId) ? resolvePart(ratchetId, 'RATCHET', system) : null,
+      bit: (bitId) ? resolvePart(bitId, 'BIT', system) : null,
       description: descriptionCol !== undefined ? String(row[descriptionCol] || '').trim() : '',
       isActive,
       createdAt: createdAtCol !== undefined ? String(row[createdAtCol] || '').trim() : '',
       updatedAt: updatedAtCol !== undefined ? String(row[updatedAtCol] || '').trim() : ''
-    };
-    decks.push(deck);
+    });
   });
 
-  if (publicMode) {
-    decks.sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')));
-  }
-  const finalDecks = limit ? decks.slice(0, limit) : decks;
-  return { status: 'success', decks: finalDecks, counts: { active: activeCount, reserve: reserveCount, total: activeCount + reserveCount } };
+  Logger.log('[DECK OWNER RESULT]', {
+    matchingDeckCount: decks.length,
+    activeCount,
+    reserveCount
+  });
+
+  Logger.log('[DECK LOAD]', { total: decks.length, active: activeCount, reserve: reserveCount });
+  return res({ status: 'success', decks, counts: { active: activeCount, reserve: reserveCount, total: activeCount + reserveCount } });
 }
 
 function resolveDeckOwner(data) {
   const googleId = String(data.googleId || '').trim();
-  let sessionEmail = '';
+  const sessionEmail = '';
   let authenticated = false;
 
   try {
@@ -1810,181 +1721,281 @@ function resolveDeckOwner(data) {
   return { authorized: true, googleId };
 }
 
-
-function validateActiveDeckPartUniqueness_(data, values, headers, ownerGoogleId, excludeDeckId) {
-  const isActive = String(data?.isActive ?? 'TRUE').toLowerCase().trim() !== 'false';
-  if (!isActive) {
-    return { valid: true };
-  }
-
-  const headerIndex = {};
-  headers.forEach((h, i) => {
-    headerIndex[String(h || '').toLowerCase().trim()] = i;
-  });
-
-  const googleIdCol = headerIndex['google_id'];
-  const isActiveCol = headerIndex['is_active'];
-  if (googleIdCol === undefined || isActiveCol === undefined) {
-    return { valid: false, message: 'Header BladerDecks tidak lengkap untuk validasi active deck' };
-  }
-
-  const partColumns = [
-    ['lock_chip', 'Lock Chip'],
-    ['blade', 'Blade'],
-    ['over_blade', 'Over Blade'],
-    ['assist_blade', 'Assist Blade'],
-    ['ratchet', 'Ratchet'],
-    ['bit', 'Bit']
-  ].filter(([header]) => headerIndex[header] !== undefined);
-
-  const candidateIds = new Map();
-  partColumns.forEach(([header, label]) => {
-    const id = String(data?.[
-      header === 'lock_chip' ? 'lockChip' :
-      header === 'over_blade' ? 'overBlade' :
-      header === 'assist_blade' ? 'assistBlade' :
-      header === 'ratchet' ? 'ratchet' :
-      header === 'bit' ? 'bit' : 'blade'
-    ] || '').trim();
-
-    if (id) candidateIds.set(id.toUpperCase(), label);
-  });
-
-  for (let i = 1; i < values.length; i++) {
-    const row = values[i];
-    const rowGoogleId = String(row[googleIdCol] || '').trim();
-    const rowDeckId = headerIndex['deck_id'] !== undefined
-      ? String(row[headerIndex['deck_id']] || '').trim()
-      : '';
-    const rowIsActive = String(row[isActiveCol] || '').toLowerCase().trim() === 'true';
-
-    if (rowGoogleId !== ownerGoogleId || !rowIsActive) continue;
-    if (excludeDeckId && rowDeckId === excludeDeckId) continue;
-
-    for (const [header, label] of partColumns) {
-      const existingId = String(row[headerIndex[header]] || '').trim().toUpperCase();
-      if (!existingId) continue;
-
-      if (candidateIds.has(existingId)) {
-        return {
-          valid: false,
-          message: `${candidateIds.get(existingId)} sudah dipakai oleh active deck lain`
-        };
-      }
-    }
-  }
-
-  return { valid: true };
-}
-
 function createDeck(data) {
   const auth = resolveDeckOwner(data);
   if (!auth.authorized) return res({ status: 'error', message: auth.error });
+
   const userGoogleId = auth.googleId;
   const deckSheet = SS.getSheetByName('BladerDecks');
   if (!deckSheet) return res({ status: 'error', message: 'Sheet BladerDecks tidak ditemukan' });
-  ensureSheetColumn_(deckSheet, 'over_blade');
 
-  const values = deckSheet.getDataRange().getDisplayValues();
-  const headers = values[0].map(h => String(h || '').toLowerCase().trim());
-  const idx = name => headers.indexOf(name);
+  const deckHeaders = deckSheet.getDataRange().getDisplayValues()[0];
+  const deckHeaderMap = {};
+  deckHeaders.forEach((h, i) => {
+    deckHeaderMap[String(h).toLowerCase().trim()] = i;
+  });
+  const isActiveCol = deckHeaderMap['is_active'];
+  const googleIdCol = deckHeaderMap['google_id'];
+
   const deckName = String(data.deckName || '').trim();
   const system = String(data.system || '').toUpperCase().trim();
   const lockChip = String(data.lockChip || '').trim();
   const blade = String(data.blade || '').trim();
-  const overBlade = String(data.overBlade || '').trim();
   const assistBlade = String(data.assistBlade || '').trim();
   const ratchet = String(data.ratchet || '').trim();
   const bit = String(data.bit || '').trim();
   const description = String(data.description || '').trim();
+
   if (!deckName) return res({ status: 'error', message: 'Deck name wajib diisi' });
   if (!['BX', 'UX', 'CX'].includes(system)) return res({ status: 'error', message: 'System harus BX, UX, atau CX' });
 
   const partsMap = getBeybladePartsMap();
-  const validation = validateDeckPartIds(data, partsMap);
-  if (!validation.valid) return res({ status: 'error', message: validation.message });
 
-  const activeUnique = validateActiveDeckPartUniqueness_(data, values, headers, userGoogleId, null);
-  if (!activeUnique.valid) {
-    return res({ status: 'error', message: activeUnique.message });
+  const validation = validateDeckPartIds(data, partsMap);
+  if (!validation.valid) {
+    return res({ status: 'error', message: 'Invalid part selection. Expected part_id.' });
+  }
+
+  const validatePart = (partId, expectedType, expectedSystems) => {
+    const part = partsMap[partId];
+    if (!part) return false;
+    if (!part.isActive) return false;
+    if (expectedType && part.partType !== expectedType) return false;
+    if (expectedSystems && !expectedSystems.includes(part.system)) return false;
+    return true;
+  };
+
+  if (system === 'CX') {
+    if (!validatePart(lockChip, 'LOCK_CHIP', ['CX'])) return res({ status: 'error', message: 'Lock Chip tidak valid untuk CX' });
+    if (!validatePart(blade, 'BLADE', ['CX'])) return res({ status: 'error', message: 'Blade tidak valid untuk CX' });
+    if (!validatePart(assistBlade, 'ASSIST_BLADE', ['CX'])) return res({ status: 'error', message: 'Assist Blade tidak valid untuk CX' });
+    if (!validatePart(ratchet, 'RATCHET', ['ALL', 'CX'])) return res({ status: 'error', message: 'Ratchet tidak valid untuk CX' });
+    if (!validatePart(bit, 'BIT', ['ALL', 'CX'])) return res({ status: 'error', message: 'Bit tidak valid untuk CX' });
+  } else {
+    if (!validatePart(blade, 'BLADE', [system])) return res({ status: 'error', message: 'Blade tidak valid untuk ' + system });
+    if (!validatePart(ratchet, 'RATCHET', ['ALL', system])) return res({ status: 'error', message: 'Ratchet tidak valid untuk ' + system });
+    if (!validatePart(bit, 'BIT', ['ALL', system])) return res({ status: 'error', message: 'Bit tidak valid untuk ' + system });
   }
 
   const isActive = String(data.isActive || '').toLowerCase().trim() !== 'false';
-  const googleIdCol = idx('google_id');
-  const isActiveCol = idx('is_active');
-  const activeDecks = values.slice(1).filter(row => String(row[googleIdCol] || '').trim() === userGoogleId && String(row[isActiveCol] || '').toLowerCase().trim() === 'true');
-  if (isActive && activeDecks.length >= 3) return res({ status: 'error', message: 'Maximum 3 active decks. Deactivate one active deck first.' });
+  const activeDecks = deckSheet.getDataRange().getDisplayValues().slice(1).filter(row => {
+    const rowGoogleId = googleIdCol !== undefined ? String(row[googleIdCol] || '').trim() : '';
+    const rowActive = isActiveCol !== undefined ? String(row[isActiveCol] || '').toLowerCase().trim() : 'true';
+    return rowGoogleId === userGoogleId && rowActive === 'true';
+  });
 
-  const existingIds = new Set(values.slice(1).map(row => String(row[0] || '').trim()).filter(Boolean));
-  let deckId; do { deckId = generateShortDeckId(); } while (existingIds.has(deckId));
+  if (isActive && activeDecks.length >= 3) {
+    return res({ status: 'error', message: 'Maximum 3 active decks. Deactivate one active deck first.' });
+  }
+
+  let deckId;
+  const existingIds = new Set();
+  const allRows = deckSheet.getDataRange().getDisplayValues();
+  allRows.slice(1).forEach(row => {
+    const id = String(row[0] || '').trim();
+    if (id) existingIds.add(id);
+  });
+
+  do {
+    deckId = generateShortDeckId();
+  } while (existingIds.has(deckId));
+
   const now = new Date();
   const timestamp = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
-  const row = new Array(deckSheet.getLastColumn()).fill('');
-  const valuesByHeader = {
-    'deck_id': deckId, 'google_id': userGoogleId, 'deck_name': deckName, 'system': system,
-    'lock_chip': lockChip, 'blade': blade, 'over_blade': overBlade, 'assist_blade': assistBlade,
-    'ratchet': ratchet, 'bit': bit, 'description': description, 'is_active': isActive ? 'TRUE' : 'FALSE',
-    'created_at': timestamp, 'updated_at': timestamp
-  };
-  headers.forEach((header, i) => { if (valuesByHeader[header] !== undefined) row[i] = valuesByHeader[header]; });
-  deckSheet.appendRow(row);
+
+  const isActiveValue = isActive ? 'TRUE' : 'FALSE';
+
+  Logger.log('[DECK CREATE PARTS]', {
+    deckId,
+    system,
+    lockChip: lockChip || '',
+    blade: blade || '',
+    assistBlade: assistBlade || '',
+    ratchet: ratchet || '',
+    bit: bit || ''
+  });
+
+  deckSheet.appendRow([
+    deckId,
+    userGoogleId,
+    deckName,
+    system,
+    lockChip || '',
+    blade || '',
+    assistBlade || '',
+    ratchet || '',
+    bit || '',
+    description,
+    isActiveValue,
+    timestamp,
+    timestamp
+  ]);
+
   return res({ status: 'success', deckId, message: 'Deck berhasil dibuat' });
+}
+
+function validateDeckPartIds(data, partsMap) {
+  const fields = [
+    { key: 'lockChip', expectedType: 'LOCK_CHIP', expectedSystems: ['CX'] },
+    { key: 'blade', expectedType: 'BLADE', expectedSystems: ['BX', 'UX', 'CX', 'ALL'] },
+    { key: 'assistBlade', expectedType: 'ASSIST_BLADE', expectedSystems: ['CX'] },
+    { key: 'ratchet', expectedType: 'RATCHET', expectedSystems: ['BX', 'UX', 'CX', 'ALL'] },
+    { key: 'bit', expectedType: 'BIT', expectedSystems: ['BX', 'UX', 'CX', 'ALL'] }
+  ];
+
+  const invalidFields = [];
+
+  fields.forEach(field => {
+    const value = String(data[field.key] || '').trim();
+    if (!value) return;
+
+    const part = partsMap[value];
+    if (!part) {
+      invalidFields.push({
+        field: field.key,
+        value,
+        reason: 'Part ID tidak ditemukan di BeybladeParts'
+      });
+      return;
+    }
+    if (part.partType !== field.expectedType) {
+      invalidFields.push({
+        field: field.key,
+        value,
+        reason: `Expected type ${field.expectedType}, got ${part.partType}`
+      });
+    }
+  });
+
+  return {
+    valid: invalidFields.length === 0,
+    invalidFields
+  };
 }
 
 function updateDeck(data) {
   const auth = resolveDeckOwner(data);
   if (!auth.authorized) return res({ status: 'error', message: auth.error });
+
   const userGoogleId = auth.googleId;
   const deckSheet = SS.getSheetByName('BladerDecks');
   if (!deckSheet) return res({ status: 'error', message: 'Sheet BladerDecks tidak ditemukan' });
-  ensureSheetColumn_(deckSheet, 'over_blade');
+
   const deckId = String(data.deckId || '').trim();
   if (!deckId) return res({ status: 'error', message: 'deckId wajib diisi' });
+
   const values = deckSheet.getDataRange().getDisplayValues();
   if (values.length < 2) return res({ status: 'error', message: 'Data deck tidak ditemukan' });
-  const headers = values[0].map(h => String(h || '').toLowerCase().trim());
-  const idx = name => headers.indexOf(name);
+
+  const headers = values[0];
   const rows = values.slice(1);
+  const headerMap = {};
+  headers.forEach((h, i) => {
+    headerMap[String(h).toLowerCase().trim()] = i;
+  });
+
+  const deckIdCol = headerMap['deck_id'];
+  const googleIdCol = headerMap['google_id'];
+  const deckNameCol = headerMap['deck_name'];
+  const systemCol = headerMap['system'];
+  const lockChipCol = headerMap['lock_chip'];
+  const bladeCol = headerMap['blade'];
+  const assistBladeCol = headerMap['assist_blade'];
+  const ratchetCol = headerMap['ratchet'];
+  const bitCol = headerMap['bit'];
+  const descriptionCol = headerMap['description'];
+  const updatedAtCol = headerMap['updated_at'];
+
   let targetRowIndex = -1;
+  let targetRow = null;
   for (let i = 0; i < rows.length; i++) {
-    if (String(rows[i][idx('deck_id')] || '').trim() === deckId && String(rows[i][idx('google_id')] || '').trim() === userGoogleId) { targetRowIndex = i + 2; break; }
+    const rowDeckId = deckIdCol !== undefined ? String(rows[i][deckIdCol] || '').trim() : '';
+    const rowGoogleId = googleIdCol !== undefined ? String(rows[i][googleIdCol] || '').trim() : '';
+    if (rowDeckId === deckId && rowGoogleId === userGoogleId) {
+      targetRowIndex = i + 2;
+      targetRow = rows[i];
+      break;
+    }
   }
-  if (targetRowIndex < 0) return res({ status: 'error', message: 'Deck tidak ditemukan atau bukan milik Anda' });
+
+  if (!targetRow || targetRowIndex < 0) return res({ status: 'error', message: 'Deck tidak ditemukan atau bukan milik Anda' });
+
   const deckName = String(data.deckName || '').trim();
   const system = String(data.system || '').toUpperCase().trim();
   const lockChip = String(data.lockChip || '').trim();
   const blade = String(data.blade || '').trim();
-  const overBlade = String(data.overBlade || '').trim();
   const assistBlade = String(data.assistBlade || '').trim();
   const ratchet = String(data.ratchet || '').trim();
   const bit = String(data.bit || '').trim();
   const description = String(data.description || '').trim();
-  const partsMap = getBeybladePartsMap();
-  if (!deckName) return res({ status: 'error', message: 'Deck name wajib diisi' });
-  if (!['BX','UX','CX'].includes(system)) return res({ status: 'error', message: 'System harus BX, UX, atau CX' });
-  const validation = validateDeckPartIds(data, partsMap);
-  if (!validation.valid) return res({ status: 'error', message: validation.message });
 
-  const activeUnique = validateActiveDeckPartUniqueness_(data, values, headers, userGoogleId, deckId);
-  if (!activeUnique.valid) {
-    return res({ status: 'error', message: activeUnique.message });
+  if (!deckName) return res({ status: 'error', message: 'Deck name wajib diisi' });
+  if (!['BX', 'UX', 'CX'].includes(system)) return res({ status: 'error', message: 'System harus BX, UX, atau CX' });
+
+  const partsMap = getBeybladePartsMap();
+
+  const validation = validateDeckPartIds(data, partsMap);
+  if (!validation.valid) {
+    return res({ status: 'error', message: 'Invalid part selection. Expected part_id.' });
   }
 
-  const isActive = String(data.isActive || '').toLowerCase().trim() !== 'false';
-  const updates = {
-    deck_name: deckName,
-    system,
-    lock_chip: lockChip,
-    blade,
-    over_blade: overBlade,
-    assist_blade: assistBlade,
-    ratchet,
-    bit,
-    description,
-    is_active: isActive ? 'TRUE' : 'FALSE'
+  const validatePart = (partId, expectedType, expectedSystems) => {
+    const part = partsMap[partId];
+    if (!part) return false;
+    if (!part.isActive) return false;
+    if (expectedType && part.partType !== expectedType) return false;
+    if (expectedSystems && !expectedSystems.includes(part.system)) return false;
+    return true;
   };
-  Object.entries(updates).forEach(([header, value]) => { const col = idx(header); if (col >= 0) deckSheet.getRange(targetRowIndex, col + 1).setValue(value); });
-  if (idx('updated_at') >= 0) deckSheet.getRange(targetRowIndex, idx('updated_at') + 1).setValue(Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss'));
+
+  if (system === 'CX') {
+    if (!validatePart(lockChip, 'LOCK_CHIP', ['CX'])) return res({ status: 'error', message: 'Lock Chip tidak valid untuk CX' });
+    if (!validatePart(blade, 'BLADE', ['CX'])) return res({ status: 'error', message: 'Blade tidak valid untuk CX' });
+    if (!validatePart(assistBlade, 'ASSIST_BLADE', ['CX'])) return res({ status: 'error', message: 'Assist Blade tidak valid untuk CX' });
+    if (!validatePart(ratchet, 'RATCHET', ['ALL', 'CX'])) return res({ status: 'error', message: 'Ratchet tidak valid untuk CX' });
+    if (!validatePart(bit, 'BIT', ['ALL', 'CX'])) return res({ status: 'error', message: 'Bit tidak valid untuk CX' });
+  } else {
+    if (!validatePart(blade, 'BLADE', [system])) return res({ status: 'error', message: 'Blade tidak valid untuk ' + system });
+    if (!validatePart(ratchet, 'RATCHET', ['ALL', system])) return res({ status: 'error', message: 'Ratchet tidak valid untuk ' + system });
+    if (!validatePart(bit, 'BIT', ['ALL', system])) return res({ status: 'error', message: 'Bit tidak valid untuk ' + system });
+  }
+
+  Logger.log('[DECK UPDATE PARTS]', {
+    deckId,
+    system,
+    lockChip: lockChip || '',
+    blade: blade || '',
+    assistBlade: assistBlade || '',
+    ratchet: ratchet || '',
+    bit: bit || ''
+  });
+
+  const timestamp = Utilities.formatDate(
+    new Date(),
+    Session.getScriptTimeZone(),
+    'yyyy-MM-dd HH:mm:ss'
+  );
+
+  const updates = {
+    [deckNameCol]: deckName,
+    [systemCol]: system,
+    [lockChipCol]: lockChip || '',
+    [bladeCol]: blade || '',
+    [assistBladeCol]: assistBlade || '',
+    [ratchetCol]: ratchet || '',
+    [bitCol]: bit || '',
+    [descriptionCol]: description,
+    [updatedAtCol]: timestamp
+  };
+
+  for (const [colKey, value] of Object.entries(updates)) {
+    if (colKey === 'undefined' || colKey === 'null') continue;
+    const colNum = parseInt(colKey, 10);
+    if (!isNaN(colNum) && colNum >= 0) {
+      deckSheet.getRange(targetRowIndex, colNum + 1).setValue(value);
+    }
+  }
+
   return res({ status: 'success', message: 'Deck berhasil diperbarui' });
 }
 
@@ -2045,7 +2056,7 @@ function deleteDeck(data) {
   const values = deckSheet.getDataRange().getDisplayValues();
   const headers = values[0];
   let deckIdCol = -1, googleIdCol = -1;
-  
+
   headers.forEach((h, i) => {
     const headerName = String(h).toLowerCase().trim();
     if (headerName === 'deck_id') deckIdCol = i;
@@ -2064,7 +2075,7 @@ function deleteDeck(data) {
     deckSheet.deleteRow(targetRowIndex);
     return res({ status: 'success', message: 'Deck berhasil dihapus' });
   }
-  
+
   return res({ status: 'error', message: 'Deck tidak ditemukan atau bukan milik Anda' });
 }
 
@@ -2451,10 +2462,10 @@ function getBladers() {
         });
 
         const boardIdCol = boardHeaderMap['google_id'] !== undefined ? boardHeaderMap['google_id'] : boardHeaderMap['googleid'];
+        const statusCol = boardHeaderMap['status'];
         const pointCol = boardHeaderMap['point'];
         const pointFinishCol = boardHeaderMap['point_finish'] !== undefined ? boardHeaderMap['point_finish'] : boardHeaderMap['pointfinish'];
         const prevRankCol = boardHeaderMap['previous_rank'];
-      const statusCol = boardHeaderMap['status'];
 
         const entries = [];
         boardRows.forEach(row => {
@@ -2463,8 +2474,8 @@ function getBladers() {
           const point = pointCol !== undefined ? Number(row[pointCol]) || 0 : 0;
           const pointFinish = pointFinishCol !== undefined ? Number(row[pointFinishCol]) || 0 : 0;
           const previousRank = prevRankCol !== undefined ? (String(row[prevRankCol] || '').trim() ? Number(row[prevRankCol]) : null) : null;
-          const status = statusCol !== undefined ? String(row[statusCol] || '').toLowerCase().trim() : '';
-          entries.push({ googleId: gId, point, pointFinish, previousRank, status });
+          const sheetStatus = statusCol !== undefined ? String(row[statusCol] || '').toLowerCase().trim() : '';
+          entries.push({ googleId: gId, point, pointFinish, previousRank, sheetStatus });
         });
 
         entries.sort((a, b) => {
@@ -2474,9 +2485,17 @@ function getBladers() {
 
         entries.forEach((entry, index) => {
           const currentRank = index + 1;
-          const status = ['up', 'down', 'stay', 'new'].includes(entry.status)
-            ? entry.status
-            : 'stay';
+          let status = entry.sheetStatus || '';
+          if (!status) {
+            status = 'stay';
+            if (entry.previousRank === null || entry.previousRank === undefined || String(entry.previousRank) === '') {
+              status = 'new';
+            } else if (entry.previousRank > currentRank) {
+              status = 'up';
+            } else if (entry.previousRank < currentRank) {
+              status = 'down';
+            }
+          }
           leaderboardMap[entry.googleId] = {
             point: entry.point,
             pointFinish: entry.pointFinish,
@@ -2546,10 +2565,10 @@ function getBladerProfile(data) {
       });
 
       const boardIdCol = boardHeaderMap['google_id'] !== undefined ? boardHeaderMap['google_id'] : boardHeaderMap['googleid'];
+      const statusCol = boardHeaderMap['status'];
       const pointCol = boardHeaderMap['point'];
       const pointFinishCol = boardHeaderMap['point_finish'] !== undefined ? boardHeaderMap['point_finish'] : boardHeaderMap['pointfinish'];
       const prevRankCol = boardHeaderMap['previous_rank'];
-      const statusCol = boardHeaderMap['status'];
 
       const allEntries = [];
       boardRows.forEach(row => {
@@ -2558,8 +2577,8 @@ function getBladerProfile(data) {
         const point = pointCol !== undefined ? Number(row[pointCol]) || 0 : 0;
         const pointFinish = pointFinishCol !== undefined ? Number(row[pointFinishCol]) || 0 : 0;
         const previousRank = prevRankCol !== undefined ? (String(row[prevRankCol] || '').trim() ? Number(row[prevRankCol]) : null) : null;
-        const status = statusCol !== undefined ? String(row[statusCol] || '').toLowerCase().trim() : '';
-        allEntries.push({ googleId: gId, point, pointFinish, previousRank, status });
+        const sheetStatus = statusCol !== undefined ? String(row[statusCol] || '').toLowerCase().trim() : '';
+        allEntries.push({ googleId: gId, point, pointFinish, previousRank, sheetStatus });
       });
 
       allEntries.sort((a, b) => {
@@ -2570,11 +2589,16 @@ function getBladerProfile(data) {
       const playerEntry = allEntries.find(e => e.googleId === googleId);
       if (playerEntry) {
         const rank = allEntries.findIndex(e => e === playerEntry) + 1;
-        let status = ['up','down','stay','new'].includes(playerEntry.status) ? playerEntry.status : 'stay';
-        if (!playerEntry.status) {
-          if (playerEntry.previousRank === null || playerEntry.previousRank === undefined || String(playerEntry.previousRank) === '') status = 'new';
-          else if (playerEntry.previousRank > rank) status = 'up';
-          else if (playerEntry.previousRank < rank) status = 'down';
+        let status = playerEntry.sheetStatus || '';
+        if (!status) {
+          status = 'stay';
+          if (playerEntry.previousRank === null || playerEntry.previousRank === undefined || String(playerEntry.previousRank) === '') {
+            status = 'new';
+          } else if (playerEntry.previousRank > rank) {
+            status = 'up';
+          } else if (playerEntry.previousRank < rank) {
+            status = 'down';
+          }
         }
         leaderboard = {
           rank: rank,
@@ -2711,7 +2735,6 @@ function getBladerProfile(data) {
       pointFinish: 0,
       status: ''
     },
-    decks: getPublicDecksByGoogleId_(googleId, 3).decks || [],
     tournamentSummary: {
       tournamentsPlayed: tournamentsPlayed
     },
@@ -3198,22 +3221,22 @@ function getPlayerNickname(googleId) {
   try {
     const playerSheet = SS.getSheetByName("Players");
     if (!playerSheet) return '';
-    
+
     const values = playerSheet.getDataRange().getDisplayValues();
     if (values.length < 2) return '';
-    
+
     const headers = values[0];
     const rows = values.slice(1);
     const map = {};
     headers.forEach((h, i) => {
       map[String(h).toLowerCase().trim()] = i;
     });
-    
+
     const googleIdCol = map['google_id'] !== undefined ? map['google_id'] : map['googleid'];
     const nicknameCol = map['nickname'] !== undefined ? map['nickname'] : map['nama'];
-    
+
     if (googleIdCol === undefined || nicknameCol === undefined) return '';
-    
+
     for (let i = 0; i < rows.length; i++) {
       const rowGoogleId = String(rows[i][googleIdCol] || '').trim();
       if (rowGoogleId === googleId) {
@@ -3686,10 +3709,7 @@ function createProfile(data) {
 
 function postAttendance(data) {
   const eventId = String(data.eventId || '').trim();
-  const googleId = String(data.googleId || '').trim();
-
   if (!eventId) return res({ status: 'error', message: 'eventId wajib diisi' });
-  if (!googleId) return res({ status: 'error', message: 'googleId wajib diisi' });
 
   const eventSheet = SS.getSheetByName("Events");
   if (!eventSheet) return res({ status: 'error', message: 'Sheet Events tidak ditemukan' });
@@ -3728,163 +3748,24 @@ function postAttendance(data) {
   }
 
   const sheet = SS.getSheetByName("Attendance");
-  if (!sheet) return res({ status: 'error', message: 'Sheet Attendance tidak ditemukan' });
-
   const values = sheet.getDataRange().getValues();
-  const isDuplicate = values.some(row =>
-    String(row[1] || '').trim() === eventId &&
-    String(row[2] || '').trim() === googleId
-  );
+
+  const isDuplicate = values.some(row => row[1] == data.eventId && row[2] == data.googleId);
 
   if (isDuplicate) {
     return res({ status: "exists", message: "Anda sudah absen di event ini!" });
   }
 
-  // Sumber nickname resmi = Players.nickname, bukan user.name dari Google.
-  const playerSheet = SS.getSheetByName("Players");
-  if (!playerSheet) {
-    return res({ status: 'error', message: 'Sheet Players tidak ditemukan' });
-  }
-
-  const playerValues = playerSheet.getDataRange().getDisplayValues();
-  if (playerValues.length < 2) {
-    return res({ status: 'error', message: 'Data pemain belum tersedia' });
-  }
-
-  const playerHeaders = playerValues[0];
-  const playerMap = {};
-  playerHeaders.forEach((h, i) => {
-    playerMap[String(h).toLowerCase().trim()] = i;
-  });
-
-  const googleIdCol = playerMap['google_id'] !== undefined
-    ? playerMap['google_id']
-    : playerMap['googleid'];
-  const nicknameCol = playerMap['nickname'];
-  const emailCol = playerMap['email'];
-  const photoCol = playerMap['photo_url'] !== undefined
-    ? playerMap['photo_url']
-    : (playerMap['foto'] !== undefined ? playerMap['foto'] : playerMap['photo']);
-
-  if (googleIdCol === undefined || nicknameCol === undefined) {
-    return res({
-      status: 'error',
-      message: 'Kolom google_id/nickname di Players tidak ditemukan'
-    });
-  }
-
-  const playerRow = playerValues.slice(1).find(row =>
-    String(row[googleIdCol] || '').trim() === googleId
-  );
-
-  if (!playerRow) {
-    return res({ status: 'error', message: 'Profil pemain tidak ditemukan' });
-  }
-
-  const nickname = String(playerRow[nicknameCol] || '').trim() || 'Blader';
-  const email = emailCol !== undefined
-    ? String(playerRow[emailCol] || '').trim()
-    : String(data.email || '').trim();
-  const foto = photoCol !== undefined
-    ? String(playerRow[photoCol] || '').trim()
-    : String(data.foto || '').trim();
-
   sheet.appendRow([
     new Date(),
-    eventId,
-    googleId,
-    nickname,
-    email,
-    foto
+    data.eventId,
+    data.googleId,
+    data.nickname,
+    data.email,
+    data.foto
   ]);
 
-  return res({
-    status: "success",
-    nickname,
-    email,
-    foto
-  });
-}
-
-function repairAttendanceNicknames() {
-  const attendanceSheet = SS.getSheetByName('Attendance');
-  const playersSheet = SS.getSheetByName('Players');
-
-  if (!attendanceSheet || !playersSheet) {
-    return res({
-      status: 'error',
-      message: 'Sheet Attendance atau Players tidak ditemukan'
-    });
-  }
-
-  const attendanceValues = attendanceSheet.getDataRange().getValues();
-  const playerValues = playersSheet.getDataRange().getDisplayValues();
-
-  if (attendanceValues.length < 2 || playerValues.length < 2) {
-    return res({
-      status: 'success',
-      updated: 0,
-      skipped: 0,
-      message: 'Tidak ada data yang perlu diperbaiki'
-    });
-  }
-
-  const playerHeaders = playerValues[0];
-  const playerMap = {};
-  playerHeaders.forEach((h, i) => {
-    playerMap[String(h).toLowerCase().trim()] = i;
-  });
-
-  const googleIdCol = playerMap['google_id'] !== undefined
-    ? playerMap['google_id']
-    : playerMap['googleid'];
-  const nicknameCol = playerMap['nickname'];
-
-  if (googleIdCol === undefined || nicknameCol === undefined) {
-    return res({
-      status: 'error',
-      message: 'Kolom google_id/nickname di Players tidak ditemukan'
-    });
-  }
-
-  const nicknameByGoogleId = {};
-  playerValues.slice(1).forEach(row => {
-    const googleId = String(row[googleIdCol] || '').trim();
-    const nickname = String(row[nicknameCol] || '').trim();
-    if (googleId && nickname) {
-      nicknameByGoogleId[googleId] = nickname;
-    }
-  });
-
-  let updated = 0;
-  let skipped = 0;
-
-  for (let i = 1; i < attendanceValues.length; i++) {
-    const googleId = String(attendanceValues[i][2] || '').trim();
-    if (!googleId) {
-      skipped++;
-      continue;
-    }
-
-    const nickname = nicknameByGoogleId[googleId];
-    if (!nickname) {
-      skipped++;
-      continue;
-    }
-
-    const currentName = String(attendanceValues[i][3] || '').trim();
-    if (currentName !== nickname) {
-      attendanceSheet.getRange(i + 1, 4).setValue(nickname);
-      updated++;
-    }
-  }
-
-  return res({
-    status: 'success',
-    updated,
-    skipped,
-    message: `Repair nickname selesai. ${updated} baris diperbarui.`
-  });
+  return res({ status: "success" });
 }
 
 function updateNickname(data) {
@@ -3983,7 +3864,7 @@ function createEvent(data) {
     data.nama || '',
     new Date(),
     data.lokasi || '',
-     "upcoming",
+    "upcoming",
     "",
     "",
     "",
@@ -4185,6 +4066,8 @@ function finishTournamentStatus(data) {
   if (tournamentStatusCol !== undefined) {
     sheet.getRange(targetRowIndex + 2, tournamentStatusCol + 1).setValue('finished');
   }
+
+  deleteTempMatchMapSheet(eventId);
 
   return res({ status: 'success', message: 'Tournament berhasil diselesaikan!', event_id: eventId, tournament_status: 'finished' });
 }
@@ -4770,22 +4653,22 @@ function challongeFetch(method, urlPath, bodyObj, version) {
   // Header wajib untuk Challonge API v2.1 (Authorization-Type: v1 agar API key v1 tetap berlaku).
   const options = useV2
     ? {
-        "method": method,
-        "headers": {
-          "Authorization": apiKey,
-          "Authorization-Type": "v1",
-          "Content-Type": "application/vnd.api+json",
-          "Accept": "application/json"
-        },
-        "muteHttpExceptions": true
-      }
+      "method": method,
+      "headers": {
+        "Authorization": apiKey,
+        "Authorization-Type": "v1",
+        "Content-Type": "application/vnd.api+json",
+        "Accept": "application/json"
+      },
+      "muteHttpExceptions": true
+    }
     : {
-        "method": method,
-        "headers": {
-          "Authorization": 'Basic ' + Utilities.base64Encode(username + ':' + apiKey)
-        },
-        "muteHttpExceptions": true
-      };
+      "method": method,
+      "headers": {
+        "Authorization": 'Basic ' + Utilities.base64Encode(username + ':' + apiKey)
+      },
+      "muteHttpExceptions": true
+    };
 
   if (bodyObj !== undefined && bodyObj !== null) {
     options.payload = JSON.stringify(bodyObj);
@@ -4903,39 +4786,27 @@ function generateTournament(payload) {
       return res({ status: 'error', message: 'Event tidak aktif' });
     }
 
-    Logger.log('[CHALLONGE CONSISTENCY] eventId=' + eventId + 
-      ' challonge_id=' + (eventData.event.challonge_id || '') + 
-      ' challonge_url=' + (eventData.event.challonge_url || '') + 
-      ' challonge_state=' + (eventData.event.challonge_state || '') + 
+    Logger.log('[CHALLONGE CONSISTENCY] eventId=' + eventId +
+      ' challonge_id=' + (eventData.event.challonge_id || '') +
+      ' challonge_url=' + (eventData.event.challonge_url || '') +
+      ' challonge_state=' + (eventData.event.challonge_state || '') +
       ' tournament_status=' + (eventData.event.tournament_status || ''));
 
     if (eventData.event.challongeUrl && String(eventData.event.challongeUrl).trim() !== '') {
       return res({ status: 'success', challongeUrl: eventData.event.challongeUrl, alreadyGenerated: true });
     }
 
-    const formatRaw = String(payload.format || 'weekly').toLowerCase().trim();
-    const isFinal = formatRaw.indexOf('double') !== -1 || formatRaw.indexOf('final') !== -1;
-
-    let tournamentParticipants = [];
-
-    if (isFinal) {
-      const finalSeedResult = getFinalSeedParticipants_(16);
-      if (finalSeedResult.status !== 'success') return res(finalSeedResult);
-      tournamentParticipants = finalSeedResult.participants;
-    } else {
-      tournamentParticipants = Array.isArray(eventData.participants)
-        ? eventData.participants.filter(p => p && p.nama && String(p.nama).trim() !== '')
-        : [];
-
-      if (tournamentParticipants.length < 2) {
-        return res({ status: 'error', message: 'Minimal 2 peserta untuk membuat turnamen' });
-      }
+    if (!eventData.participants || eventData.participants.length < 2) {
+      return res({ status: 'error', message: 'Minimal 2 peserta untuk membuat turnamen' });
     }
 
     const apiKey = PropertiesService.getScriptProperties().getProperty('CHALLONGE_API_KEY');
     if (!apiKey) {
       return res({ status: 'error', message: 'Challonge API Key belum di-set di Script Properties GAS' });
     }
+
+    const format = String(payload.format || 'weekly').toLowerCase();
+    const isFinal = format === 'final';
 
     const safeUrl = 'lalapan_bey_' + eventId + '_' + Date.now();
 
@@ -4948,7 +4819,10 @@ function generateTournament(payload) {
     };
 
     if (isFinal) {
-      attributes.double_elimination_options = { grand_finals_modifier: 'single match' };
+      attributes.double_elimination_options = {
+        split_participants: true,
+        grand_finals_modifier: 'single match'
+      };
     } else {
       attributes.swiss_options = {
         rounds: 3,
@@ -4970,8 +4844,9 @@ function generateTournament(payload) {
 
     const tournamentId = createRes.data.id;
     const challongeUrl = 'https://challonge.com/' + createRes.data.attributes.url;
+    ensureTempMatchMapSheet(eventId, tournamentId);
 
-    const validParticipants = tournamentParticipants;
+    const validParticipants = eventData.participants.filter(p => p && p.nama && String(p.nama).trim() !== '');
     const mappingPromises = [];
     for (const participant of validParticipants) {
       const pRes = challongeFetch('post', '/tournaments/' + tournamentId + '/participants.json', {
@@ -4992,13 +4867,6 @@ function generateTournament(payload) {
 
     if (mappingPromises.length > 0) {
       saveTournamentParticipantMapping(eventId, tournamentId, mappingPromises);
-    }
-
-    if (!isFinal) {
-      const randomizeRes = challongeFetch('post', '/tournaments/' + tournamentId + '/participants/randomize.json');
-      if (randomizeRes.__error) {
-        return res({ status: 'error', message: 'Turnamen dibuat tapi gagal mengacak peserta (HTTP ' + randomizeRes.code + '): ' + randomizeRes.text });
-      }
     }
 
     const startRes = challongeFetch('put', '/tournaments/' + tournamentId + '/change_state.json', {
@@ -5049,7 +4917,7 @@ function generateTournament(payload) {
       const fallbackUrlCol = headerMap['challonge_url'] !== undefined ? headerMap['challonge_url'] : (headerMap['challongeurl'] !== undefined ? headerMap['challongeurl'] : 6);
       const fallbackIdTournamentCol = headerMap['challonge_id'] !== undefined ? headerMap['challonge_id'] : (headerMap['challongeid'] !== undefined ? headerMap['challongeid'] : 5);
       const fallbackStateCol = headerMap['challonge_state'] !== undefined ? headerMap['challonge_state'] : (headerMap['challongestate'] !== undefined ? headerMap['challongestate'] : 7);
-      
+
       for (let i = 0; i < eventRows.length; i++) {
         if (String(eventRows[i][fallbackIdCol]) === eventId) {
           eventSheet.getRange(i + 2, fallbackUrlCol + 1).setValue(challongeUrl);
@@ -5073,164 +4941,9 @@ function generateTournament(payload) {
 // Flow: create -> add participants -> simpan challonge_url/id/state/created_at -> success.
 // Tidak memanggil start (admin akan start via tombol terpisah).
 // ============================================
-
-/**
- * Ambil 16 seed FINAL dari Leaderboard bulan berjalan.
- *
- * Sumber ranking:
- *   Leaderboard (sheet aktif saat ini)
- *   -> Point DESC
- *   -> Point Finish DESC
- *
- * Attendance TIDAK dipakai untuk menentukan seed FINAL.
- * Attendance tetap hanya untuk status kehadiran pada halaman event.
- */
-function getFinalSeedParticipants_(limit) {
-  const maxPlayers = Number(limit || 16);
-
-  const boardSheet = SS.getSheetByName('Leaderboard');
-  const playerSheet = SS.getSheetByName('Players');
-
-  if (!boardSheet) {
-    return { status: 'error', message: 'Sheet Leaderboard tidak ditemukan' };
-  }
-
-  if (!playerSheet) {
-    return { status: 'error', message: 'Sheet Players tidak ditemukan' };
-  }
-
-  const boardValues = boardSheet.getDataRange().getDisplayValues();
-  if (boardValues.length < 2) {
-    return { status: 'error', message: 'Leaderboard kosong' };
-  }
-
-  const boardHeaders = boardValues[0];
-  const boardRows = boardValues.slice(1);
-  const boardMap = {};
-
-  boardHeaders.forEach((h, i) => {
-    boardMap[String(h || '').toLowerCase().trim()] = i;
-  });
-
-  const idCol = boardMap['google_id'] !== undefined
-    ? boardMap['google_id']
-    : boardMap['googleid'];
-
-  const pointCol = boardMap['point'];
-  const pointFinishCol = boardMap['point_finish'] !== undefined
-    ? boardMap['point_finish']
-    : boardMap['pointfinish'];
-
-  if (idCol === undefined || pointCol === undefined || pointFinishCol === undefined) {
-    return {
-      status: 'error',
-      message: 'Header Leaderboard harus memiliki google_id, point, dan point_finish'
-    };
-  }
-
-  const playerValues = playerSheet.getDataRange().getDisplayValues();
-  if (playerValues.length < 2) {
-    return { status: 'error', message: 'Players kosong' };
-  }
-
-  const playerHeaders = playerValues[0];
-  const playerRows = playerValues.slice(1);
-  const playerMap = {};
-
-  playerHeaders.forEach((h, i) => {
-    playerMap[String(h || '').toLowerCase().trim()] = i;
-  });
-
-  const playerIdCol = playerMap['google_id'] !== undefined
-    ? playerMap['google_id']
-    : playerMap['googleid'];
-
-  const nicknameCol = playerMap['nickname'] !== undefined
-    ? playerMap['nickname']
-    : playerMap['nama'];
-
-  const photoCol = playerMap['photo_url'] !== undefined
-    ? playerMap['photo_url']
-    : (
-        playerMap['foto'] !== undefined
-          ? playerMap['foto']
-          : playerMap['photo']
-      );
-
-  if (playerIdCol === undefined || nicknameCol === undefined) {
-    return {
-      status: 'error',
-      message: 'Header Players harus memiliki google_id dan nickname'
-    };
-  }
-
-  const playerById = {};
-  playerRows.forEach(row => {
-    const googleId = String(row[playerIdCol] || '').trim();
-    const nickname = String(row[nicknameCol] || '').trim();
-
-    if (!googleId || !nickname) return;
-
-    playerById[googleId] = {
-      googleId: googleId,
-      nickname: nickname,
-      foto: photoCol !== undefined ? String(row[photoCol] || '').trim() : ''
-    };
-  });
-
-  const ranked = [];
-
-  boardRows.forEach(row => {
-    const googleId = String(row[idCol] || '').trim();
-    if (!googleId) return;
-
-    const player = playerById[googleId];
-    if (!player) return;
-
-    ranked.push({
-      googleId: googleId,
-      nickname: player.nickname,
-      foto: player.foto,
-      point: Number(row[pointCol]) || 0,
-      pointFinish: Number(row[pointFinishCol]) || 0
-    });
-  });
-
-  ranked.sort((a, b) => {
-    if (b.point !== a.point) return b.point - a.point;
-    if (b.pointFinish !== a.pointFinish) return b.pointFinish - a.pointFinish;
-    return a.googleId.localeCompare(b.googleId);
-  });
-
-  const selected = ranked.slice(0, maxPlayers);
-
-  if (selected.length < maxPlayers) {
-    return {
-      status: 'error',
-      message:
-        'Final membutuhkan ' + maxPlayers +
-        ' pemain valid di Leaderboard. Saat ini hanya tersedia ' +
-        selected.length + '.',
-      required: maxPlayers,
-      available: selected.length
-    };
-  }
-
-  return {
-    status: 'success',
-    participants: selected.map((p, index) => ({
-      googleId: p.googleId,
-      nama: p.nickname,
-      foto: p.foto,
-      seed: index + 1,
-      leaderboardRank: index + 1
-    }))
-  };
-}
-
 function createTournament(data) {
   try {
-    const eventId = String(data.eventId);
+    const eventId = String(data.eventId || '').trim();
 
     const eventData = fetchActiveEvent();
     if (eventData.error || !eventData.event) {
@@ -5240,81 +4953,77 @@ function createTournament(data) {
       return res({ status: 'error', message: 'Event tidak aktif' });
     }
 
-    // GUARD: cegah admin generate berulang (sama seperti generateTournament)
-    if (eventData.event.challongeUrl && String(eventData.event.challongeUrl).trim() !== '') {
-      return res({ status: 'success', challongeUrl: eventData.event.challongeUrl, challongeId: '', challongeState: 'pending', alreadyGenerated: true });
+    // GUARD: cegah admin generate berulang.
+    if (
+      eventData.event.challongeUrl &&
+      String(eventData.event.challongeUrl).trim() !== ''
+    ) {
+      return res({
+        status: 'success',
+        challongeUrl: eventData.event.challongeUrl,
+        challongeId: '',
+        challongeState: 'pending',
+        alreadyGenerated: true
+      });
     }
 
-    const formatRaw = String(data.format || 'weekly').toLowerCase().trim();
-    const isFinal = formatRaw.indexOf('double') !== -1 || formatRaw.indexOf('final') !== -1;
+    const apiKey = PropertiesService
+      .getScriptProperties()
+      .getProperty('CHALLONGE_API_KEY');
 
-    let tournamentParticipants = [];
-
-    if (isFinal) {
-      const finalSeedResult = getFinalSeedParticipants_(16);
-      if (finalSeedResult.status !== 'success') {
-        return res(finalSeedResult);
-      }
-
-      tournamentParticipants = finalSeedResult.participants;
-
-      Logger.log(
-        '[FINAL SEEDING] ' +
-        tournamentParticipants
-          .map(p => '#' + p.seed + ' ' + p.nama)
-          .join(' | ')
-      );
-    } else {
-      const attendanceParticipants = Array.isArray(eventData.participants)
-        ? eventData.participants.filter(
-            p => p && p.nama && String(p.nama).trim() !== ''
-          )
-        : [];
-
-      if (attendanceParticipants.length < 2) {
-        return res({
-          status: 'error',
-          message: 'Minimal 2 peserta untuk membuat turnamen'
-        });
-      }
-
-      tournamentParticipants = attendanceParticipants.map((p, index) => ({
-        googleId: String(p.googleId || '').trim(),
-        nama: String(p.nama || '').trim(),
-        foto: String(p.foto || '').trim(),
-        seed: index + 1,
-        leaderboardRank: null
-      }));
-    }
-
-    const apiKey = PropertiesService.getScriptProperties().getProperty('CHALLONGE_API_KEY');
     if (!apiKey) {
-      return res({ status: 'error', message: 'Challonge API Key belum di-set di Script Properties GAS' });
+      return res({
+        status: 'error',
+        message: 'Challonge API Key belum di-set di Script Properties GAS'
+      });
     }
 
-    // --- PRESET CHALLONGE (tanggung jawab GAS, bukan frontend) ---
-    // Hanya parameter resmi v2.1 (audit: ✅ Supported). Tidak ada mark_as_tentative /
-    // require_team_registration / auto_start / custom_theme (semua NOT SUPPORTED).
-    // Frontend kirim format: "weekly" | "final" (atau "swiss" | "double elimination").
-    // Default swiss/weekly jika kosong.
-    const tournamentType = isFinal ? 'double elimination' : 'swiss';
-    const baseName = eventData.event.nama + ' - Liga ' + new Date().getFullYear() + (isFinal ? ' (Final)' : ' (Weekly)');
+    // --- FORMAT TOURNAMENT ---
+    // Frontend mengirim: "weekly" | "final"
+    const formatRaw = String(data.format || 'weekly').toLowerCase().trim();
+    const isFinal =
+      formatRaw.indexOf('double') !== -1 ||
+      formatRaw.indexOf('final') !== -1;
 
-    // URL otomatis dari event, aman untuk slug. GAS tangani suffix anti-duplikat.
+    const tournamentType = isFinal ? 'double elimination' : 'swiss';
+
+    const baseName =
+      eventData.event.nama +
+      ' - Liga ' +
+      new Date().getFullYear() +
+      (isFinal ? ' (Final)' : ' (Weekly)');
+
+    // --- URL / SLUG ---
     const slugBase = 'lalapan_bey_' + eventId + '_' + Date.now();
     let finalSlug = slugBase;
     let suffix = 1;
+
     while (true) {
-      const check = challongeFetch('get', '/tournaments/' + finalSlug + '.json', undefined, 'v2.1');
-      if (check.__error && check.code === 404) break; // slug tersedia
+      const check = challongeFetch(
+        'get',
+        '/tournaments/' + finalSlug + '.json',
+        undefined,
+        'v2.1'
+      );
+
+      if (check.__error && check.code === 404) break;
+
       if (check.__error) {
-        return res({ status: 'error', message: 'Gagal cek ketersediaan slug (HTTP ' + check.code + '): ' + check.text });
+        return res({
+          status: 'error',
+          message:
+            'Gagal cek ketersediaan slug (HTTP ' +
+            check.code +
+            '): ' +
+            check.text
+        });
       }
-      // slug sudah dipakai -> tambah suffix
+
       suffix++;
       finalSlug = slugBase + '_' + suffix;
     }
 
+    // --- PRESET CHALLONGE ---
     const attributes = {
       name: baseName,
       url: finalSlug,
@@ -5324,16 +5033,26 @@ function createTournament(data) {
       private: false,
       tie_breaks: ['match wins', 'points scored', 'points difference']
     };
+
     if (isFinal) {
-      // Double Elimination: grand finals = 1 match (single match)
-      attributes.double_elimination_options = { grand_finals_modifier: 'single match' };
+      // FINAL:
+      // Seed 1-8  -> Upper / Winners
+      // Seed 9-16 -> Lower / Losers
+      // Grand Final -> 1 match
+      attributes.double_elimination_options = {
+        split_participants: true,
+        grand_finals_modifier: 'single match'
+      };
     } else {
-      // Swiss: rounds + poin (hanya valid untuk swiss)
-      // Gunakan nilai dari form Admin (data.swiss_rounds). Default 3 jika kosong/salah.
+      // WEEKLY tetap Swiss dan tetap memakai shuffle.
       const swissRounds = Number(data.swiss_rounds);
-      const rounds = (!isNaN(swissRounds) && swissRounds >= 1) ? swissRounds : 3;
-      Logger.log("Debug: Jumlah ronde yang dikirim ke Challonge adalah: " + rounds);
-      // pts_for_bye wajib diisi (API v2.1 mewajibkan field ini, lihat error 422).
+      const rounds =
+        !isNaN(swissRounds) && swissRounds >= 1 ? swissRounds : 3;
+
+      Logger.log(
+        '[CREATE WEEKLY] Jumlah ronde Swiss: ' + rounds
+      );
+
       attributes.swiss_options = {
         rounds: rounds,
         pts_for_match_win: 1,
@@ -5344,30 +5063,242 @@ function createTournament(data) {
       };
     }
 
-    // 1. CREATE (v2.1, JSON:API)
-    const createRes = challongeFetch('post', '/tournaments.json', { data: { type: 'tournament', attributes: attributes } }, 'v2.1');
+    // 1. CREATE TOURNAMENT
+    const createRes = challongeFetch(
+      'post',
+      '/tournaments.json',
+      {
+        data: {
+          type: 'tournament',
+          attributes: attributes
+        }
+      },
+      'v2.1'
+    );
+
     if (createRes.__error) {
-      return res({ status: 'error', message: 'Gagal buat turnamen di Challonge (HTTP ' + createRes.code + '): ' + createRes.text });
+      return res({
+        status: 'error',
+        message:
+          'Gagal buat turnamen di Challonge (HTTP ' +
+          createRes.code +
+          '): ' +
+          createRes.text
+      });
     }
+
     if (createRes.errors) {
-      return res({ status: 'error', message: 'Gagal buat turnamen di Challonge: ' + JSON.stringify(createRes.errors) });
+      return res({
+        status: 'error',
+        message:
+          'Gagal buat turnamen di Challonge: ' +
+          JSON.stringify(createRes.errors)
+      });
     }
 
     const tournamentId = createRes.data.id;
-    const challongeUrl = 'https://challonge.com/' + createRes.data.attributes.url;
+    const challongeUrl =
+      'https://challonge.com/' + createRes.data.attributes.url;
     const createdAt = new Date();
 
-    // 2. ADD PARTICIPANTS (v2.1, JSON:API)
-    const validParticipants = tournamentParticipants;
+    // Dipakai untuk penyimpanan nomor match sementara.
+    ensureTempMatchMapSheet(eventId, tournamentId);
+
+    // 2. SIAPKAN PESERTA
+    let validParticipants = [];
+
+    if (isFinal) {
+      // FINAL TIDAK memakai urutan Attendance.
+      // Ambil leaderboard bulan/periode aktif, lalu gunakan urutannya
+      // sebagai seed 1-16.
+      let leaderboardPayload;
+
+      try {
+        const leaderboardResponse = getLeaderboard();
+        leaderboardPayload =
+          leaderboardResponse &&
+          typeof leaderboardResponse.getContent === 'function'
+            ? JSON.parse(leaderboardResponse.getContent())
+            : leaderboardResponse;
+      } catch (leaderboardError) {
+        return res({
+          status: 'error',
+          message:
+            'Gagal membaca leaderboard untuk Final: ' +
+            leaderboardError.message
+        });
+      }
+
+      if (!Array.isArray(leaderboardPayload)) {
+        return res({
+          status: 'error',
+          message:
+            'Data leaderboard tidak valid. Final membutuhkan leaderboard berbentuk array.'
+        });
+      }
+
+      // getLeaderboard() diharapkan sudah mengembalikan urutan ranking aktif.
+      // Kita tetap sort defensif berdasarkan beberapa kemungkinan nama field.
+      const rankedPlayers = leaderboardPayload
+        .map((player, originalIndex) => {
+          const rank = Number(
+            player.rank ??
+            player.ranking ??
+            player.position ??
+            player.posisi ??
+            originalIndex + 1
+          );
+
+          const points = Number(
+            player.point ??
+            player.points ??
+            player.total_point ??
+            player.total_points ??
+            0
+          );
+
+          const pointFinish = Number(
+            player.pointFinish ??
+            player.point_finish ??
+            player.pointfinish ??
+            0
+          );
+
+          const nickname = String(
+            player.nickname ??
+            player.nama ??
+            player.name ??
+            player.nick ??
+            ''
+          ).trim();
+
+          const googleId = String(
+            player.googleId ??
+            player.google_id ??
+            player.googleid ??
+            player.id ??
+            ''
+          ).trim();
+
+          return {
+            raw: player,
+            rank: Number.isFinite(rank) && rank > 0
+              ? rank
+              : originalIndex + 1,
+            points: Number.isFinite(points) ? points : 0,
+            pointFinish: Number.isFinite(pointFinish) ? pointFinish : 0,
+            nama: nickname,
+            googleId: googleId
+          };
+        })
+        .filter(player => player.nama);
+
+      rankedPlayers.sort((a, b) => {
+        if (a.rank !== b.rank) return a.rank - b.rank;
+        if (b.points !== a.points) return b.points - a.points;
+        return b.pointFinish - a.pointFinish;
+      });
+
+      if (rankedPlayers.length < 16) {
+        return res({
+          status: 'error',
+          message:
+            'Final membutuhkan minimal 16 pemain pada leaderboard bulan berjalan. Ditemukan: ' +
+            rankedPlayers.length
+        });
+      }
+
+      validParticipants = rankedPlayers.slice(0, 16).map((player, index) => ({
+        googleId: player.googleId,
+        nama: player.nama,
+        seed: index + 1,
+        leaderboard_rank: index + 1
+      }));
+
+      Logger.log(
+        '[CREATE FINAL] Seed 1-16=' +
+        JSON.stringify(
+          validParticipants.map(p => ({
+            seed: p.seed,
+            nama: p.nama,
+            googleId: p.googleId
+          })),
+          null,
+          2
+        )
+      );
+    } else {
+      // WEEKLY tetap mengambil peserta dari Attendance.
+      validParticipants = (eventData.participants || [])
+        .filter(
+          p =>
+            p &&
+            p.nama &&
+            String(p.nama).trim() !== ''
+        )
+        .map(p => ({
+          googleId: String(p.googleId || '').trim(),
+          nama: String(p.nama || '').trim()
+        }));
+    }
+
+    if (validParticipants.length < 2) {
+      return res({
+        status: 'error',
+        message: 'Minimal 2 peserta untuk membuat turnamen'
+      });
+    }
+
+    if (isFinal && validParticipants.length !== 16) {
+      return res({
+        status: 'error',
+        message:
+          'Final harus memiliki tepat 16 peserta dari leaderboard. Saat ini: ' +
+          validParticipants.length
+      });
+    }
+
+    // 3. ADD PARTICIPANTS
     const mappingPromises = [];
+
     for (const participant of validParticipants) {
-      const pRes = challongeFetch('post', '/tournaments/' + tournamentId + '/participants.json', {
-        data: { type: 'participant', attributes: { name: String(participant.nama).trim() } }
-      }, 'v2.1');
+      const participantAttributes = {
+        name: String(participant.nama).trim()
+      };
+
+      // Hanya Final yang mengunci seed.
+      if (isFinal && participant.seed) {
+        participantAttributes.seed = Number(participant.seed);
+      }
+
+      const pRes = challongeFetch(
+        'post',
+        '/tournaments/' + tournamentId + '/participants.json',
+        {
+          data: {
+            type: 'participant',
+            attributes: participantAttributes
+          }
+        },
+        'v2.1'
+      );
+
       if (pRes.__error) {
-        console.error('Gagal tambah peserta ' + participant.nama + ' (HTTP ' + pRes.code + '): ' + pRes.text);
+        console.error(
+          'Gagal tambah peserta ' +
+          participant.nama +
+          ' (HTTP ' +
+          pRes.code +
+          '): ' +
+          pRes.text
+        );
       } else if (pRes.errors) {
-        console.error('Gagal tambah peserta ' + participant.nama + ': ' + JSON.stringify(pRes.errors));
+        console.error(
+          'Gagal tambah peserta ' +
+          participant.nama +
+          ': ' +
+          JSON.stringify(pRes.errors)
+        );
       } else if (pRes.data && pRes.data.id) {
         mappingPromises.push({
           challongeParticipantId: String(pRes.data.id),
@@ -5378,29 +5309,76 @@ function createTournament(data) {
     }
 
     if (mappingPromises.length > 0) {
-      saveTournamentParticipantMapping(eventId, tournamentId, mappingPromises);
+      saveTournamentParticipantMapping(
+        eventId,
+        tournamentId,
+        mappingPromises
+      );
     }
 
-    // 3. WEEKLY diacak; FINAL mempertahankan seed dari Leaderboard.
+    // 4. RANDOMIZE HANYA UNTUK WEEKLY
+    // FINAL tidak boleh diacak karena seed 1-16 berasal dari leaderboard.
     if (!isFinal) {
-      const randomizeRes = challongeFetch('post', '/tournaments/' + tournamentId + '/participants/randomize.json');
+      const randomizeRes = challongeFetch(
+        'post',
+        '/tournaments/' +
+          tournamentId +
+          '/participants/randomize.json'
+      );
+
       if (randomizeRes.__error) {
-        return res({ status: 'error', message: 'Turnamen dibuat tapi gagal mengacak peserta (HTTP ' + randomizeRes.code + '): ' + randomizeRes.text });
+        return res({
+          status: 'error',
+          message:
+            'Turnamen Weekly dibuat tapi gagal mengacak peserta (HTTP ' +
+            randomizeRes.code +
+            '): ' +
+            randomizeRes.text
+        });
       }
+    } else {
+      Logger.log(
+        '[CREATE FINAL] Randomize dilewati karena Final memakai seed leaderboard.'
+      );
     }
 
-    const startRes = challongeFetch('put', '/tournaments/' + tournamentId + '/change_state.json', {
-      data: { type: 'TournamentState', attributes: { state: 'start' } }
-    }, 'v2.1');
+    // 5. START TOURNAMENT
+    const startRes = challongeFetch(
+      'put',
+      '/tournaments/' + tournamentId + '/change_state.json',
+      {
+        data: {
+          type: 'TournamentState',
+          attributes: {
+            state: 'start'
+          }
+        }
+      },
+      'v2.1'
+    );
+
     if (startRes.__error) {
-      return res({ status: 'error', message: 'Turnamen dibuat tapi gagal dimulai (HTTP ' + startRes.code + '): ' + startRes.text });
-    }
-    if (startRes.errors) {
-      return res({ status: 'error', message: 'Turnamen dibuat tapi gagal dimulai: ' + JSON.stringify(startRes.errors) });
+      return res({
+        status: 'error',
+        message:
+          'Turnamen dibuat tapi gagal dimulai (HTTP ' +
+          startRes.code +
+          '): ' +
+          startRes.text
+      });
     }
 
-    // 4. SIMPAN ke sheet Events
-    const eventSheet = SS.getSheetByName("Events");
+    if (startRes.errors) {
+      return res({
+        status: 'error',
+        message:
+          'Turnamen dibuat tapi gagal dimulai: ' +
+          JSON.stringify(startRes.errors)
+      });
+    }
+
+    // 6. SIMPAN KE SHEET EVENTS
+    const eventSheet = SS.getSheetByName('Events');
     const eventValues = eventSheet.getDataRange().getValues();
     const eventHeaders = eventValues[0];
     const eventRows = eventValues.slice(1);
@@ -5410,11 +5388,39 @@ function createTournament(data) {
       headerMap[String(h).toLowerCase().trim()] = i;
     });
 
-    const challongeCol = headerMap['challonge_url'] !== undefined ? headerMap['challonge_url'] : (headerMap['challongeurl'] !== undefined ? headerMap['challongeurl'] : -1);
-    const idCol = headerMap['challonge_id'] !== undefined ? headerMap['challonge_id'] : (headerMap['challongeid'] !== undefined ? headerMap['challongeid'] : -1);
-    const eventIdCol = headerMap['event_id'] !== undefined ? headerMap['event_id'] : (headerMap['id'] !== undefined ? headerMap['id'] : -1);
-    const stateCol = headerMap['challonge_state'] !== undefined ? headerMap['challonge_state'] : (headerMap['challongestate'] !== undefined ? headerMap['challongestate'] : -1);
-    const createdCol = headerMap['created_at'] !== undefined ? headerMap['created_at'] : -1;
+    const challongeCol =
+      headerMap['challonge_url'] !== undefined
+        ? headerMap['challonge_url']
+        : headerMap['challongeurl'] !== undefined
+          ? headerMap['challongeurl']
+          : -1;
+
+    const idCol =
+      headerMap['challonge_id'] !== undefined
+        ? headerMap['challonge_id']
+        : headerMap['challongeid'] !== undefined
+          ? headerMap['challongeid']
+          : -1;
+
+    const eventIdCol =
+      headerMap['event_id'] !== undefined
+        ? headerMap['event_id']
+        : headerMap['id'] !== undefined
+          ? headerMap['id']
+          : -1;
+
+    const stateCol =
+      headerMap['challonge_state'] !== undefined
+        ? headerMap['challonge_state']
+        : headerMap['challongestate'] !== undefined
+          ? headerMap['challongestate']
+          : -1;
+
+    const createdCol =
+      headerMap['created_at'] !== undefined
+        ? headerMap['created_at']
+        : -1;
+
     const tournamentStatusCol = headerMap['tournament_status'];
 
     let targetRowNumber = -1;
@@ -5423,28 +5429,79 @@ function createTournament(data) {
       for (let i = 0; i < eventRows.length; i++) {
         if (String(eventRows[i][eventIdCol]) === eventId) {
           targetRowNumber = i + 2;
-          if (challongeCol >= 0) eventSheet.getRange(targetRowNumber, challongeCol + 1).setValue(challongeUrl);
-          if (idCol >= 0) eventSheet.getRange(targetRowNumber, idCol + 1).setValue(tournamentId);
-          if (stateCol >= 0) eventSheet.getRange(targetRowNumber, stateCol + 1).setValue('started');
-          if (createdCol >= 0) {
-            const now = new Date();
-            eventSheet.getRange(targetRowNumber, createdCol + 1).setValue(now.toISOString());
+
+          if (challongeCol >= 0) {
+            eventSheet
+              .getRange(targetRowNumber, challongeCol + 1)
+              .setValue(challongeUrl);
           }
+
+          if (idCol >= 0) {
+            eventSheet
+              .getRange(targetRowNumber, idCol + 1)
+              .setValue(tournamentId);
+          }
+
+          if (stateCol >= 0) {
+            eventSheet
+              .getRange(targetRowNumber, stateCol + 1)
+              .setValue('started');
+          }
+
+          if (createdCol >= 0) {
+            eventSheet
+              .getRange(targetRowNumber, createdCol + 1)
+              .setValue(createdAt.toISOString());
+          }
+
           break;
         }
       }
     } else {
-      const fallbackIdCol = headerMap['event_id'] !== undefined ? headerMap['event_id'] : (headerMap['id'] !== undefined ? headerMap['id'] : 0);
-      const fallbackUrlCol = headerMap['challonge_url'] !== undefined ? headerMap['challonge_url'] : (headerMap['challongeurl'] !== undefined ? headerMap['challongeurl'] : 6);
-      const fallbackIdTournamentCol = headerMap['challonge_id'] !== undefined ? headerMap['challonge_id'] : (headerMap['challongeid'] !== undefined ? headerMap['challongeid'] : 5);
-      const fallbackStateCol = headerMap['challonge_state'] !== undefined ? headerMap['challonge_state'] : (headerMap['challongestate'] !== undefined ? headerMap['challongestate'] : 7);
-      
+      const fallbackIdCol =
+        headerMap['event_id'] !== undefined
+          ? headerMap['event_id']
+          : headerMap['id'] !== undefined
+            ? headerMap['id']
+            : 0;
+
+      const fallbackUrlCol =
+        headerMap['challonge_url'] !== undefined
+          ? headerMap['challonge_url']
+          : headerMap['challongeurl'] !== undefined
+            ? headerMap['challongeurl']
+            : 6;
+
+      const fallbackIdTournamentCol =
+        headerMap['challonge_id'] !== undefined
+          ? headerMap['challonge_id']
+          : headerMap['challongeid'] !== undefined
+            ? headerMap['challongeid']
+            : 5;
+
+      const fallbackStateCol =
+        headerMap['challonge_state'] !== undefined
+          ? headerMap['challonge_state']
+          : headerMap['challongestate'] !== undefined
+            ? headerMap['challongestate']
+            : 7;
+
       for (let i = 0; i < eventRows.length; i++) {
         if (String(eventRows[i][fallbackIdCol]) === eventId) {
           targetRowNumber = i + 2;
-          eventSheet.getRange(targetRowNumber, fallbackUrlCol + 1).setValue(challongeUrl);
-          eventSheet.getRange(targetRowNumber, fallbackIdTournamentCol + 1).setValue(tournamentId);
-          eventSheet.getRange(targetRowNumber, fallbackStateCol + 1).setValue('started');
+
+          eventSheet
+            .getRange(targetRowNumber, fallbackUrlCol + 1)
+            .setValue(challongeUrl);
+
+          eventSheet
+            .getRange(targetRowNumber, fallbackIdTournamentCol + 1)
+            .setValue(tournamentId);
+
+          eventSheet
+            .getRange(targetRowNumber, fallbackStateCol + 1)
+            .setValue('started');
+
           break;
         }
       }
@@ -5453,19 +5510,38 @@ function createTournament(data) {
     if (targetRowNumber < 1 || tournamentStatusCol === undefined) {
       return res({
         status: 'error',
-        message: 'Gagal menemukan baris atau kolom tournament_status untuk event ' + eventId + '. Pastikan header Events memiliki kolom tournament_status.'
+        message:
+          'Gagal menemukan baris atau kolom tournament_status untuk event ' +
+          eventId +
+          '. Pastikan header Events memiliki kolom tournament_status.'
       });
     }
 
-    eventSheet.getRange(targetRowNumber, tournamentStatusCol + 1).setValue('running');
+    eventSheet
+      .getRange(targetRowNumber, tournamentStatusCol + 1)
+      .setValue('running');
 
-    const readBackValue = eventSheet.getRange(targetRowNumber, tournamentStatusCol + 1).getDisplayValue();
-    Logger.log('[GENERATE BRACKET STATUS] eventId=' + eventId + ' tournament_status=' + readBackValue);
+    const readBackValue = eventSheet
+      .getRange(targetRowNumber, tournamentStatusCol + 1)
+      .getDisplayValue();
 
-    if (String(readBackValue || '').toLowerCase().trim() !== 'running') {
+    Logger.log(
+      '[GENERATE BRACKET STATUS] eventId=' +
+        eventId +
+        ' tournament_status=' +
+        readBackValue
+    );
+
+    if (
+      String(readBackValue || '').toLowerCase().trim() !== 'running'
+    ) {
       return res({
         status: 'error',
-        message: 'Gagal menulis tournament_status=running untuk event ' + eventId + '. Nilai terbaca: ' + readBackValue
+        message:
+          'Gagal menulis tournament_status=running untuk event ' +
+          eventId +
+          '. Nilai terbaca: ' +
+          readBackValue
       });
     }
 
@@ -5475,15 +5551,19 @@ function createTournament(data) {
       challongeId: tournamentId,
       challongeState: 'started',
       tournament_status: 'running',
-      createdAt: createdAt,
       format: isFinal ? 'final' : 'weekly',
-      randomized: !isFinal,
-      seededFromLeaderboard: isFinal,
-      participants: tournamentParticipants
+      participants: validParticipants.map(p => ({
+        name: p.nama,
+        googleId: p.googleId || '',
+        seed: p.seed || null
+      })),
+      createdAt: createdAt
     });
-
   } catch (err) {
-    return res({ status: 'error', message: 'Gagal membuat turnamen: ' + err.message });
+    return res({
+      status: 'error',
+      message: 'Gagal membuat turnamen: ' + err.message
+    });
   }
 }
 
@@ -5538,6 +5618,8 @@ function finishTournament(data) {
     eventSheet.getRange(targetRowIndex + 2, tournamentStatusCol + 1).setValue('finished');
   }
 
+  deleteTempMatchMapSheet(eventId);
+
   return res({
     status: 'success',
     eventId: eventId,
@@ -5562,7 +5644,7 @@ function lookupTournamentId(slug) {
 
   const urlCol = headerMap['challonge_url'] !== undefined ? headerMap['challonge_url'] : (headerMap['challongeurl'] !== undefined ? headerMap['challongeurl'] : 6);
   const idCol = headerMap['challonge_id'] !== undefined ? headerMap['challonge_id'] : (headerMap['challongeid'] !== undefined ? headerMap['challongeid'] : 5);
-  
+
   for (let i = 0; i < eventRows.length; i++) {
     const rowUrl = String(eventRows[i][urlCol] || '');
     const rowUrlSlug = rowUrl.indexOf('challonge.com') !== -1
@@ -5693,6 +5775,15 @@ function getOpenMatches(tournamentUrl) {
     Logger.log('[getOpenMatches] RAW MATCHES RESPONSE=' + JSON.stringify(matchesRes));
     const matchesRaw = Array.isArray(matchesRes.data) ? matchesRes.data : (Array.isArray(matchesRes) ? matchesRes : []);
     Logger.log('[getOpenMatches] matchesRaw count=' + matchesRaw.length);
+
+    const eventIdForTempMap = findEventIdByTournamentId(tournamentId);
+    if (eventIdForTempMap) {
+      upsertTempMatchMap(eventIdForTempMap, tournamentId, matchesRaw);
+    }
+    const tempMatchNumberMap = eventIdForTempMap
+      ? getTempMatchNumberMap(eventIdForTempMap)
+      : {};
+
     if (matchesRaw.length > 0) {
       Logger.log('[getOpenMatches] matchesRaw[0]=' + JSON.stringify(matchesRaw[0], null, 2));
       Logger.log('[getOpenMatches] matchesRaw[0].relationships=' + JSON.stringify(matchesRaw[0].relationships, null, 2));
@@ -5718,10 +5809,18 @@ function getOpenMatches(tournamentUrl) {
         p2Score = points[1].scores.reduce((a, b) => a + b, 0);
       }
 
+      const suggestedPlayOrder = Number(attrs.suggested_play_order);
+      const fallbackNumber = (Number.isFinite(suggestedPlayOrder) && suggestedPlayOrder > 0)
+        ? suggestedPlayOrder
+        : (index + 1);
+      const displayMatchNumber = Number(tempMatchNumberMap[String(m.id)] || fallbackNumber);
+
       return {
         match_id: String(m.id),
         round: attrs.round || 1,
-        identifier: String(index + 1),
+        identifier: String(displayMatchNumber),
+        display_match_number: displayMatchNumber,
+        suggested_play_order: Number.isFinite(suggestedPlayOrder) ? suggestedPlayOrder : null,
         player1_id: p1Id,
         player2_id: p2Id,
         state: attrs.state,
@@ -5753,6 +5852,10 @@ function getOpenMatches(tournamentUrl) {
       if (tAttr.tournament_type) tournamentType = tAttr.tournament_type;
     }
     Logger.log('[getOpenMatches] tournamentState=' + tournamentState + ' swissRounds=' + swissRounds + ' tournamentType=' + tournamentType);
+
+    if (String(tournamentState || '').toLowerCase() === 'complete' && eventIdForTempMap) {
+      deleteTempMatchMapSheet(eventIdForTempMap);
+    }
 
     const finalRes = { status: 'success', participants: participantList, matches: openMatches, completedMatches: completedMatches, tournamentState: tournamentState, swissRounds: swissRounds, tournamentType: tournamentType };
     Logger.log('[getOpenMatches] finalRes=' + JSON.stringify(finalRes));
@@ -5881,7 +5984,7 @@ function startTournament(data) {
 
       const urlCol = headerMap['challonge_url'] !== undefined ? headerMap['challonge_url'] : (headerMap['challongeurl'] !== undefined ? headerMap['challongeurl'] : 6);
       const idCol = headerMap['challonge_id'] !== undefined ? headerMap['challonge_id'] : (headerMap['challongeid'] !== undefined ? headerMap['challongeid'] : 5);
-      
+
       for (let i = 0; i < eventRows.length; i++) {
         const rowUrl = String(eventRows[i][urlCol] || '');
         const rowUrlSlug = rowUrl.indexOf('challonge.com') !== -1
@@ -5911,7 +6014,7 @@ function startTournament(data) {
       return res({
         status: 'error',
         message: 'challonge_id TIDAK DITEMUKAN di sheet Events untuk slug="' + slug + '". ' +
-                 'Pastikan event sudah dibuat via createTournament (Reset Arena & generate ulang jika perlu).'
+          'Pastikan event sudah dibuat via createTournament (Reset Arena & generate ulang jika perlu).'
       });
     }
 
@@ -5924,10 +6027,10 @@ function startTournament(data) {
         return res({
           status: 'error',
           message: 'Turnamen (id="' + identifier + '") TIDAK DITEMUKAN di akun Challonge (HTTP 404). ' +
-                   'challonge_id di sheet="' + challongeId + '". ' +
-                   'Kemungkinan: (1) API key di Script Properties GAS bukan milik akun yang membuat bracket, ' +
-                   '(2) bracket sudah dihapus, atau (3) challonge_id di sheet tidak sama dengan yang ada di Challonge. ' +
-                   'Cek: pastikan API key GAS = akun pemilik bracket, lalu Reset Arena & generate ulang.'
+            'challonge_id di sheet="' + challongeId + '". ' +
+            'Kemungkinan: (1) API key di Script Properties GAS bukan milik akun yang membuat bracket, ' +
+            '(2) bracket sudah dihapus, atau (3) challonge_id di sheet tidak sama dengan yang ada di Challonge. ' +
+            'Cek: pastikan API key GAS = akun pemilik bracket, lalu Reset Arena & generate ulang.'
         });
       }
       return res({ status: 'error', message: 'Gagal mengecek turnamen (HTTP ' + checkRes.code + '): ' + checkRes.text });
@@ -5949,7 +6052,7 @@ function startTournament(data) {
         return res({
           status: 'error',
           message: 'Gagal start: turnamen (id="' + identifier + '") tiba-tiba tidak ditemukan di Challonge (HTTP 404). ' +
-                   'Pastikan API key GAS cocok dengan akun pemilik bracket.'
+            'Pastikan API key GAS cocok dengan akun pemilik bracket.'
         });
       }
       return res({ status: 'error', message: 'Gagal start tournament (HTTP ' + response.code + '): ' + response.text + ' | URL: ' + url });
@@ -5969,7 +6072,7 @@ function startTournament(data) {
 
       const urlCol = headerMap['challonge_url'] !== undefined ? headerMap['challonge_url'] : (headerMap['challongeurl'] !== undefined ? headerMap['challongeurl'] : -1);
       const stateCol = headerMap['challonge_state'] !== undefined ? headerMap['challonge_state'] : (headerMap['challongestate'] !== undefined ? headerMap['challongestate'] : -1);
-      
+
       if (urlCol >= 0 && stateCol >= 0) {
         const fullUrl = 'https://challonge.com/' + slug;
         for (let i = 0; i < eventRows.length; i++) {
@@ -6023,7 +6126,7 @@ function randomizeParticipants(data) {
 
       const urlCol = headerMap['challonge_url'] !== undefined ? headerMap['challonge_url'] : (headerMap['challongeurl'] !== undefined ? headerMap['challongeurl'] : 6);
       const idCol = headerMap['challonge_id'] !== undefined ? headerMap['challonge_id'] : (headerMap['challongeid'] !== undefined ? headerMap['challongeid'] : 5);
-      
+
       for (let i = 0; i < eventRows.length; i++) {
         const rowUrl = String(eventRows[i][urlCol] || '');
         const rowUrlSlug = rowUrl.indexOf('challonge.com') !== -1
@@ -6410,7 +6513,7 @@ function getActiveEvent() {
 
 function runPhase3ATests() {
   const results = [];
-  
+
   function log(name, pass, detail) {
     results.push({ name, pass, detail });
     console.log((pass ? '[PASS]' : '[FAIL]') + ' ' + name + (detail ? ' - ' + detail : ''));
@@ -6457,7 +6560,7 @@ function runPhase3ATests() {
 
     const startResult = updateEventStatus(testEventId, 'aktif');
     log('Transition upcoming -> aktif', startResult.status === 'success', startResult.message);
-    
+
     const startAgainResult = updateEventStatus(testEventId, 'aktif');
     log('Transition aktif -> aktif rejected', startAgainResult.status === 'error' && startAgainResult.code === 'already_active', startAgainResult.message);
 

@@ -75,6 +75,28 @@ export default function RefereeArena({ masterPlayers, events, externalExcludedPl
   const [isSearching, setIsSearching] = useState(true);
   const [lastFetchTs, setLastFetchTs] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
+
+  // Bluetooth mode: audio tetap diputar normal, visual/animasi digeser
+  // agar kompensasi latency speaker Bluetooth.
+  const [bluetoothMode, setBluetoothMode] = useState(() => {
+    try {
+      return localStorage.getItem('refereeBluetoothMode') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const [visualDelayMs, setVisualDelayMs] = useState(() => {
+    try {
+      const saved = Number(localStorage.getItem('refereeVisualDelayMs'));
+      return Number.isFinite(saved) ? saved : 500;
+    } catch {
+      return 500;
+    }
+  });
+
+  const visualDelay = bluetoothMode ? visualDelayMs : 0;
+
   const LEAGUE_POINTS_DISTRIBUTION = [25, 20, 16, 13, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 1];
 
   const sfxCache = useRef({});
@@ -95,6 +117,15 @@ export default function RefereeArena({ masterPlayers, events, externalExcludedPl
       sfxCache.current[src] = audio;
     });
   }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('refereeBluetoothMode', String(bluetoothMode));
+      localStorage.setItem('refereeVisualDelayMs', String(visualDelayMs));
+    } catch {
+      // localStorage tidak tersedia; lanjutkan tanpa persistensi.
+    }
+  }, [bluetoothMode, visualDelayMs]);
 
   const playSfx = (src) => {
     const sound = sfxCache.current[src];
@@ -438,12 +469,28 @@ export default function RefereeArena({ masterPlayers, events, externalExcludedPl
             participantMap[String(p.id)] = p.name;
           });
         }
-        const formattedMatches = (res.matches || []).map(match => ({
-          ...match,
-          player1_name: participantMap[String(match.player1_id)] || 'TBD',
-          player2_name: participantMap[String(match.player2_id)] || 'TBD'
-        }));
-        setMatches([...formattedMatches].sort((a, b) => (a.suggested_play_order ?? 0) - (b.suggested_play_order ?? 0)));
+        const formattedMatches = (res.matches || [])
+          .map(match => ({
+            ...match,
+            player1_name: participantMap[String(match.player1_id)] || 'TBD',
+            player2_name: participantMap[String(match.player2_id)] || 'TBD'
+          }))
+          // Hanya tampilkan pertandingan yang benar-benar sudah memiliki
+          // dua pemain. TBD tetap ada di Challonge, tetapi bukan pekerjaan
+          // wasit saat ini.
+          .filter(match => {
+            const p1 = String(match.player1_name || '').trim().toUpperCase();
+            const p2 = String(match.player2_name || '').trim().toUpperCase();
+            return p1 && p2 && p1 !== 'TBD' && p2 !== 'TBD';
+          });
+
+        setMatches(
+          [...formattedMatches].sort((a, b) => {
+            const nA = Number(a.display_match_number ?? a.suggested_play_order ?? a.identifier ?? 0);
+            const nB = Number(b.display_match_number ?? b.suggested_play_order ?? b.identifier ?? 0);
+            return nA - nB;
+          })
+        );
         setCompletedMatches(res.completedMatches || []);
         setTournamentState(res.tournamentState || '');
         setTournamentType(res.tournamentType || '');
@@ -649,13 +696,18 @@ export default function RefereeArena({ masterPlayers, events, externalExcludedPl
     }
     setActiveOstId(null);
 
+    // Audio tetap langsung diputar. Hanya animasi visual yang digeser.
     playSfx(audioSrc);
 
-    setScoreEvent({ type: finishType, player, colorHex });
+    const visualTimer = setTimeout(() => {
+      setScoreEvent({ type: finishType, player, colorHex });
+    }, visualDelay);
+
     setTimeout(() => {
       handleAddScore(scoreSlot || (player === 1 ? 'p1' : 'p2'), points);
       setScoreEvent(null);
-    }, 2000);
+      clearTimeout(visualTimer);
+    }, 2000 + visualDelay);
   };
 
 
@@ -687,25 +739,31 @@ export default function RefereeArena({ masterPlayers, events, externalExcludedPl
       if (newCount >= 2) {
         toast.success(`Launch Fail 2x! Lawan mendapat +1 poin`);
 
-        setScoreEvent({ type: 'FAIL PENALTY', player: playerName, colorHex: '#EF4444' });
+        const penaltyVisualTimer = setTimeout(() => {
+          setScoreEvent({ type: 'FAIL PENALTY', player: playerName, colorHex: '#EF4444' });
+        }, visualDelay);
 
         setTimeout(() => {
           setScoreEvent(null);
           setIsScoring(false);
+          clearTimeout(penaltyVisualTimer);
 
           handleAddScore(opponent, 1);
-        }, 3000);
+        }, 3000 + visualDelay);
 
         return { ...prev, [side]: 0 };
       } else {
-        setScoreEvent({ type: 'LAUNCH FAIL', player: playerName, colorHex: '#EF4444' });
+        const failVisualTimer = setTimeout(() => {
+          setScoreEvent({ type: 'LAUNCH FAIL', player: playerName, colorHex: '#EF4444' });
+        }, visualDelay);
 
         setTimeout(() => {
           setScoreEvent(null);
           setHudPhase('READY');
           setReadyPlayers({ p1: false, p2: false });
           setIsScoring(false);
-        }, 3000);
+          clearTimeout(failVisualTimer);
+        }, 3000 + visualDelay);
 
         return { ...prev, [side]: newCount };
       }
@@ -722,14 +780,17 @@ export default function RefereeArena({ masterPlayers, events, externalExcludedPl
     }
     setActiveOstId(null);
 
-    setScoreEvent({ type: 'RELAUNCH', player: null, colorHex: '#9CA3AF' });
+    const relaunchVisualTimer = setTimeout(() => {
+      setScoreEvent({ type: 'RELAUNCH', player: null, colorHex: '#9CA3AF' });
+    }, visualDelay);
 
     setTimeout(() => {
       setScoreEvent(null);
       setHudPhase('READY');
       setReadyPlayers({ p1: false, p2: false });
       setIsScoring(false);
-    }, 3000);
+      clearTimeout(relaunchVisualTimer);
+    }, 3000 + visualDelay);
   };
 
   const handleSwap = () => {
@@ -1002,6 +1063,84 @@ export default function RefereeArena({ masterPlayers, events, externalExcludedPl
                   >
                     {isSyncing ? <RefreshCw className="animate-spin" size={16} /> : '🔄 SYNC MATCHES'}
                   </button>
+
+                  {/* Bluetooth / Visual Delay */}
+                  <div className="w-full max-w-md mt-4 rounded-2xl border border-white/5 bg-black/20 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                          AUDIO MODE
+                        </p>
+                        <p className={`mt-1 text-[9px] font-bold uppercase tracking-wide ${
+                          bluetoothMode ? 'text-cyan-300' : 'text-slate-500'
+                        }`}>
+                          {bluetoothMode
+                            ? `Bluetooth • ${visualDelayMs} ms visual delay`
+                            : 'Speaker / Wired • 0 ms'}
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setBluetoothMode(prev => !prev)}
+                        className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full border transition-colors ${
+                          bluetoothMode
+                            ? 'border-cyan-400/50 bg-cyan-500/25'
+                            : 'border-slate-600 bg-slate-800'
+                        }`}
+                        aria-label="Toggle Bluetooth mode"
+                        aria-pressed={bluetoothMode}
+                      >
+                        <span
+                          className={`inline-block h-5 w-5 transform rounded-full transition-transform ${
+                            bluetoothMode
+                              ? 'translate-x-6 bg-cyan-300'
+                              : 'translate-x-1 bg-slate-400'
+                          }`}
+                        />
+                      </button>
+                    </div>
+
+                    {bluetoothMode && (
+                      <div className="mt-4">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">
+                            VISUAL DELAY
+                          </span>
+                          <span className="text-[10px] font-black text-cyan-300 tabular-nums">
+                            {visualDelayMs} ms
+                          </span>
+                        </div>
+
+                        <input
+                          type="range"
+                          min="0"
+                          max="4000"
+                          step="50"
+                          value={visualDelayMs}
+                          onChange={(e) => setVisualDelayMs(Number(e.target.value))}
+                          className="w-full accent-cyan-400"
+                        />
+
+                        <div className="mt-2 flex items-center justify-between gap-2">
+                          {[250, 500, 750, 1000, 1500, 2000, 3000, 4000].map(value => (
+                            <button
+                              key={value}
+                              type="button"
+                              onClick={() => setVisualDelayMs(value)}
+                              className={`px-2 py-1 rounded-lg text-[8px] font-black uppercase tracking-wider transition-colors ${
+                                visualDelayMs === value
+                                  ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-400/30'
+                                  : 'bg-white/5 text-slate-500 border border-white/5 hover:text-slate-300'
+                              }`}
+                            >
+                              {value}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -1053,7 +1192,7 @@ export default function RefereeArena({ masterPlayers, events, externalExcludedPl
                       >
                         <div className="w-full flex flex-col items-center justify-center border-b border-white/5 pb-3 mb-3">
                           <span className="text-xs lg:text-sm font-black text-blue-400 tracking-widest uppercase mb-1">
-                            {m.round < 0 ? `LOWER BRACKET ${-m.round}` : `ROUND ${m.round}`} • MATCH {m.suggested_play_order ?? idx + 1}
+                            {m.round < 0 ? `LOWER BRACKET ${-m.round}` : `ROUND ${m.round}`} • MATCH {m.display_match_number ?? m.suggested_play_order ?? m.identifier ?? idx + 1}
                           </span>
                         </div>
                         <div className="flex flex-col items-center justify-center w-full text-center mt-2">
@@ -1416,6 +1555,7 @@ export default function RefereeArena({ masterPlayers, events, externalExcludedPl
               <MatchIntro
                 show={showIntro}
                 audioSrc="/voice-announcer.mp3"
+                visualDelayMs={visualDelay}
                 onFinish={() => {
                   setShowIntro(false);
                   setHudPhase('SCORE');
@@ -1692,7 +1832,14 @@ export default function RefereeArena({ masterPlayers, events, externalExcludedPl
 
                   <div className="w-full flex flex-col gap-4 max-w-lg mx-auto">
                     {(() => {
-                      const remainingMatches = matches ? matches.filter(m => m.match_id !== selectedMatch?.match_id) : [];
+                      const remainingMatches = matches
+                        ? matches.filter(m => {
+                            if (m.match_id === selectedMatch?.match_id) return false;
+                            const p1 = String(m.player1_name || '').trim().toUpperCase();
+                            const p2 = String(m.player2_name || '').trim().toUpperCase();
+                            return p1 && p2 && p1 !== 'TBD' && p2 !== 'TBD';
+                          })
+                        : [];
 
                       if (loading) {
                         return (
@@ -1723,7 +1870,7 @@ export default function RefereeArena({ masterPlayers, events, externalExcludedPl
                           >
                             <div className="flex items-center justify-between">
                               <div className="flex-1 min-w-0">
-                                <p className="text-xs lg:text-sm font-black text-blue-400 tracking-widest uppercase mb-1">{match.round < 0 ? `LOWER BRACKET ${-match.round}` : `ROUND ${match.round}`} • MATCH {match.identifier || match.suggested_play_order || index + 1}</p>
+                                <p className="text-xs lg:text-sm font-black text-blue-400 tracking-widest uppercase mb-1">{match.round < 0 ? `LOWER BRACKET ${-match.round}` : `ROUND ${match.round}`} • MATCH {match.display_match_number ?? match.suggested_play_order ?? match.identifier ?? index + 1}</p>
                                 <p className="text-xl lg:text-2xl font-sans font-bold text-white group-hover:text-blue-300 transition-colors tracking-tight truncate">{match.player1_name}</p>
                                 <p className="text-sm font-bold italic text-red-500/80 my-1">VS</p>
                                 <p className="text-xl lg:text-2xl font-sans font-bold text-white group-hover:text-blue-300 transition-colors tracking-tight truncate">{match.player2_name}</p>
