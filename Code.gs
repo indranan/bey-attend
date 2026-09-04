@@ -1746,6 +1746,7 @@ function getMyDecks(data) {
   const systemCol = headerMap['system'];
   const lockChipCol = headerMap['lock_chip'];
   const bladeCol = headerMap['blade'];
+  const overBladeCol = headerMap['over_blade'];
   const assistBladeCol = headerMap['assist_blade'];
   const ratchetCol = headerMap['ratchet'];
   const bitCol = headerMap['bit'];
@@ -1771,6 +1772,7 @@ function getMyDecks(data) {
 
     const lockChipId = lockChipCol !== undefined ? String(row[lockChipCol] || '').trim() : '';
     const bladeId = bladeCol !== undefined ? String(row[bladeCol] || '').trim() : '';
+    const overBladeId = overBladeCol !== undefined ? String(row[overBladeCol] || '').trim() : '';
     const assistBladeId = assistBladeCol !== undefined ? String(row[assistBladeCol] || '').trim() : '';
     const ratchetId = ratchetCol !== undefined ? String(row[ratchetCol] || '').trim() : '';
     const bitId = bitCol !== undefined ? String(row[bitCol] || '').trim() : '';
@@ -1805,6 +1807,7 @@ function getMyDecks(data) {
       system,
       lockChip: (!isBxOrUx && lockChipId) ? resolvePart(lockChipId, 'LOCK_CHIP', 'CX') : null,
       blade: (bladeId) ? resolvePart(bladeId, 'BLADE', system) : null,
+      overBlade: (!isBxOrUx && overBladeId) ? resolvePart(overBladeId, 'OVER_BLADE', 'CX') : null,
       assistBlade: (!isBxOrUx && assistBladeId) ? resolvePart(assistBladeId, 'ASSIST_BLADE', 'CX') : null,
       ratchet: (ratchetId) ? resolvePart(ratchetId, 'RATCHET', system) : null,
       bit: (bitId) ? resolvePart(bitId, 'BIT', system) : null,
@@ -1914,6 +1917,7 @@ function createDeck(data) {
   const system = String(data.system || '').toUpperCase().trim();
   const lockChip = String(data.lockChip || '').trim();
   const blade = String(data.blade || '').trim();
+  const overBlade = String(data.overBlade || '').trim();
   const assistBlade = String(data.assistBlade || '').trim();
   const ratchet = String(data.ratchet || '').trim();
   const bit = String(data.bit || '').trim();
@@ -1983,6 +1987,7 @@ function createDeck(data) {
     system,
     lockChip: lockChip || '',
     blade: blade || '',
+    overBlade: overBlade || '',
     assistBlade: assistBlade || '',
     ratchet: ratchet || '',
     bit: bit || ''
@@ -1995,6 +2000,7 @@ function createDeck(data) {
     system,
     lockChip || '',
     blade || '',
+    overBlade || '',
     assistBlade || '',
     ratchet || '',
     bit || '',
@@ -2073,6 +2079,7 @@ function updateDeck(data) {
   const systemCol = headerMap['system'];
   const lockChipCol = headerMap['lock_chip'];
   const bladeCol = headerMap['blade'];
+  const overBladeCol = headerMap['over_blade'];
   const assistBladeCol = headerMap['assist_blade'];
   const ratchetCol = headerMap['ratchet'];
   const bitCol = headerMap['bit'];
@@ -2097,6 +2104,7 @@ function updateDeck(data) {
   const system = String(data.system || '').toUpperCase().trim();
   const lockChip = String(data.lockChip || '').trim();
   const blade = String(data.blade || '').trim();
+  const overBlade = String(data.overBlade || '').trim();
   const assistBlade = String(data.assistBlade || '').trim();
   const ratchet = String(data.ratchet || '').trim();
   const bit = String(data.bit || '').trim();
@@ -2138,6 +2146,7 @@ function updateDeck(data) {
     system,
     lockChip: lockChip || '',
     blade: blade || '',
+    overBlade: overBlade || '',
     assistBlade: assistBlade || '',
     ratchet: ratchet || '',
     bit: bit || ''
@@ -2154,6 +2163,7 @@ function updateDeck(data) {
     [systemCol]: system,
     [lockChipCol]: lockChip || '',
     [bladeCol]: blade || '',
+    [overBladeCol]: overBlade || '',
     [assistBladeCol]: assistBlade || '',
     [ratchetCol]: ratchet || '',
     [bitCol]: bit || '',
@@ -4021,37 +4031,6 @@ function updateNickname(data) {
   const sheet = SS.getSheetByName("Players");
   if (!sheet) return res({ status: "error", message: "Sheet Players tidak ditemukan" });
 
-  const rows = sheet.getDataRange().getValues();
-  // Gunakan .toString() agar ID dari Google (string) cocok dengan ID di Sheet
-  const rowIndex = rows.findIndex(row => row[0].toString() === data.googleId.toString());
-
-  if (rowIndex === -1) {
-    return res({ status: "error", message: "Profil tidak ditemukan di database" });
-  }
-
-  // Validasi: Cek apakah nickname baru sudah dipakai orang lain
-  const newNick = data.newNickname.trim();
-  const isTaken = rows.some((row, index) => index !== rowIndex && row[3].toString().toLowerCase() === newNick.toLowerCase());
-
-  if (isTaken) {
-    return res({ status: "error", message: "Nickname sudah digunakan Blader lain!" });
-  }
-
-  // Tidak perlu update jika nickname sama dengan yang lama
-  if (rows[rowIndex][3].toString() === newNick) {
-    return res({ status: "success", message: "Nickname tidak berubah" });
-  }
-  // Update kolom D (4) untuk Nickname dan H (8) untuk Last Updated
-  sheet.getRange(rowIndex + 1, 4).setValue(newNick);
-  sheet.getRange(rowIndex + 1, 8).setValue(new Date());
-
-  return res({ status: "success" });
-}
-
-function createEvent(data) {
-  const sheet = SS.getSheetByName("Events");
-  if (!sheet) return res({ status: "error", message: "Sheet Events tidak ditemukan" });
-
   if (!data || !data.googleId || !data.newNickname) {
     return res({ status: "error", message: "Data tidak lengkap" });
   }
@@ -4074,6 +4053,36 @@ function createEvent(data) {
       return res({ status: "error", message: "Ganti nickname sedang dinonaktifkan oleh Admin" });
     }
   }
+
+  const rows = sheet.getDataRange().getValues();
+  // Gunakan .toString() agar ID dari Google (string) cocok dengan ID di Sheet
+  const rowIndex = rows.findIndex(row => row[0].toString() === data.googleId.toString());
+
+  if (rowIndex === -1) {
+    return res({ status: "error", message: "Profil tidak ditemukan di database" });
+  }
+
+  // Validasi: Cek apakah nickname baru sudah dipakai orang lain
+  const isTaken = rows.some((row, index) => index !== rowIndex && row[3].toString().toLowerCase() === newNick.toLowerCase());
+
+  if (isTaken) {
+    return res({ status: "error", message: "Nickname sudah digunakan Blader lain!" });
+  }
+
+  // Tidak perlu update jika nickname sama dengan yang lama
+  if (rows[rowIndex][3].toString() === newNick) {
+    return res({ status: "success", message: "Nickname tidak berubah" });
+  }
+  // Update kolom D (4) untuk Nickname dan H (8) untuk Last Updated
+  sheet.getRange(rowIndex + 1, 4).setValue(newNick);
+  sheet.getRange(rowIndex + 1, 8).setValue(new Date());
+
+  return res({ status: "success" });
+}
+
+function createEvent(data) {
+  const sheet = SS.getSheetByName("Events");
+  if (!sheet) return res({ status: "error", message: "Sheet Events tidak ditemukan" });
 
   const rows = sheet.getDataRange().getValues();
   const headers = rows[0];
@@ -6527,8 +6536,23 @@ function performExportStandings(data) {
     }
 
     const LEAGUE_POINTS_DISTRIBUTION = [
-      25, 20, 16, 13, 11, 10, 9, 8,
-      7, 6, 5, 4, 3, 2, 1, 1
+      30, // 1
+      24, // 2
+      20, // 3
+      17, // 4
+      15, // 5
+      13, // 6
+      11, // 7
+      10, // 8
+      9, // 9
+      8, // 10
+      7, // 11
+      6, // 12
+      5, // 13
+      4, // 14
+      3, // 15
+      2, // 16
+      1  // 17
     ];
 
     const payload = data.payload || [];
@@ -6546,7 +6570,7 @@ function performExportStandings(data) {
       if (!Number.isFinite(numericRank) || numericRank < 1) {
         return 0;
       }
-      if (numericRank >= 15) {
+      if (numericRank >= 17) {
         return 1;
       }
       return LEAGUE_POINTS_DISTRIBUTION[numericRank - 1] || 1;
@@ -6585,8 +6609,7 @@ function performExportStandings(data) {
       sheetName: '',
       headers: [],
       totalRows: 0,
-      eventRows: 0,
-      legendringRow: null
+      eventRows: 0
     };
     if (attendanceSheet) {
       const attendanceValues = attendanceSheet.getDataRange().getValues();
@@ -6624,13 +6647,6 @@ function performExportStandings(data) {
               });
             }
             tempMap[nick] = gId;
-            if (nick === 'lgendring') {
-              attendanceMeta.legendringRow = {
-                nama: row[attendanceNamaCol],
-                googleId: gId,
-                eventId: rowEventId
-              };
-            }
           });
           attendanceMap = tempMap;
         }
@@ -6648,21 +6664,6 @@ function performExportStandings(data) {
       'ATTENDANCE MAP COUNT=' +
       Object.keys(attendanceMap).length
     );
-
-    Logger.log(
-      'ATTENDANCE E9 TEST | eventId=' +
-      eventId +
-      ' | Lgendring=' +
-      (attendanceMap['lgendring'] || 'NOT_FOUND')
-    );
-
-    if (!attendanceMap['lgendring']) {
-      Logger.log('ATTENDANCE DEBUG META | ' + JSON.stringify(attendanceMeta));
-      return {
-        status: 'error',
-        message: 'Attendance E9 tidak terbaca. Cek log DEBUG META.'
-      };
-    }
 
     const missingGoogleIds = [];
     const data2D = payload.map((p, index) => {

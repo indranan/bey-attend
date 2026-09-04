@@ -64,7 +64,7 @@ export default function EventDetailPage() {
   const [loading, setLoading] = useState(true);
   const [isAttending, setIsAttending] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
-  const { user, login } = useContext(AuthContext);
+  const { user, login, currentPlayer } = useContext(AuthContext);
 
   const handleLogin = async (userData) => {
     try {
@@ -167,7 +167,10 @@ export default function EventDetailPage() {
     try {
       const res = await postToGas('attendance', {
         eventId: event.id,
-        googleId: user.sub
+        googleId: user.sub,
+        nickname: currentPlayer?.nickname || user?.name || 'Blader',
+        email: user?.email || '',
+        foto: user?.picture || ''
       });
       if (res?.status === 'success') {
         toast?.success?.('Ready to Battle!');
@@ -178,9 +181,9 @@ export default function EventDetailPage() {
             ...(prev.participants || []),
             {
               googleId: user.sub,
-              nama: res.nickname || 'Blader',
-              email: res.email || '',
-              foto: res.foto || ''
+              nama: currentPlayer?.nickname || user?.name || 'Blader',
+              email: user?.email || '',
+              foto: user?.picture || ''
             }
           ]
         } : prev);

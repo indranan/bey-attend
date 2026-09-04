@@ -97,7 +97,25 @@ export default function RefereeArena({ masterPlayers, events, externalExcludedPl
 
   const visualDelay = bluetoothMode ? visualDelayMs : 0;
 
-  const LEAGUE_POINTS_DISTRIBUTION = [25, 20, 16, 13, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 1];
+  const LEAGUE_POINTS_DISTRIBUTION = [
+    30, // 1
+    24, // 2
+    20, // 3
+    17, // 4
+    15, // 5
+    13, // 6
+    11, // 7
+    10, // 8
+    9, // 9
+    8, // 10
+    7, // 11
+    6, // 12
+    5, // 13
+    4, // 14
+    3, // 15
+    2, // 16
+    1  // 17
+  ];
 
   const sfxCache = useRef({});
   const sfxList = [
@@ -1071,9 +1089,8 @@ export default function RefereeArena({ masterPlayers, events, externalExcludedPl
                         <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
                           AUDIO MODE
                         </p>
-                        <p className={`mt-1 text-[9px] font-bold uppercase tracking-wide ${
-                          bluetoothMode ? 'text-cyan-300' : 'text-slate-500'
-                        }`}>
+                        <p className={`mt-1 text-[9px] font-bold uppercase tracking-wide ${bluetoothMode ? 'text-cyan-300' : 'text-slate-500'
+                          }`}>
                           {bluetoothMode
                             ? `Bluetooth • ${visualDelayMs} ms visual delay`
                             : 'Speaker / Wired • 0 ms'}
@@ -1083,20 +1100,18 @@ export default function RefereeArena({ masterPlayers, events, externalExcludedPl
                       <button
                         type="button"
                         onClick={() => setBluetoothMode(prev => !prev)}
-                        className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full border transition-colors ${
-                          bluetoothMode
-                            ? 'border-cyan-400/50 bg-cyan-500/25'
-                            : 'border-slate-600 bg-slate-800'
-                        }`}
+                        className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full border transition-colors ${bluetoothMode
+                          ? 'border-cyan-400/50 bg-cyan-500/25'
+                          : 'border-slate-600 bg-slate-800'
+                          }`}
                         aria-label="Toggle Bluetooth mode"
                         aria-pressed={bluetoothMode}
                       >
                         <span
-                          className={`inline-block h-5 w-5 transform rounded-full transition-transform ${
-                            bluetoothMode
-                              ? 'translate-x-6 bg-cyan-300'
-                              : 'translate-x-1 bg-slate-400'
-                          }`}
+                          className={`inline-block h-5 w-5 transform rounded-full transition-transform ${bluetoothMode
+                            ? 'translate-x-6 bg-cyan-300'
+                            : 'translate-x-1 bg-slate-400'
+                            }`}
                         />
                       </button>
                     </div>
@@ -1128,11 +1143,10 @@ export default function RefereeArena({ masterPlayers, events, externalExcludedPl
                               key={value}
                               type="button"
                               onClick={() => setVisualDelayMs(value)}
-                              className={`px-2 py-1 rounded-lg text-[8px] font-black uppercase tracking-wider transition-colors ${
-                                visualDelayMs === value
-                                  ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-400/30'
-                                  : 'bg-white/5 text-slate-500 border border-white/5 hover:text-slate-300'
-                              }`}
+                              className={`px-2 py-1 rounded-lg text-[8px] font-black uppercase tracking-wider transition-colors ${visualDelayMs === value
+                                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-400/30'
+                                : 'bg-white/5 text-slate-500 border border-white/5 hover:text-slate-300'
+                                }`}
                             >
                               {value}
                             </button>
@@ -1267,7 +1281,7 @@ export default function RefereeArena({ masterPlayers, events, externalExcludedPl
                                   )}
                                 </td>
                                 <td className="py-3 px-2 text-center font-black text-lg text-yellow-400">
-                                  {i + 1 >= 15 ? 1 : (LEAGUE_POINTS_DISTRIBUTION[i] || 0)}
+                                  {LEAGUE_POINTS_DISTRIBUTION[i] ?? 1}
                                 </td>
                                 <td className="py-3 px-2 text-center">
                                   <button
@@ -1834,11 +1848,11 @@ export default function RefereeArena({ masterPlayers, events, externalExcludedPl
                     {(() => {
                       const remainingMatches = matches
                         ? matches.filter(m => {
-                            if (m.match_id === selectedMatch?.match_id) return false;
-                            const p1 = String(m.player1_name || '').trim().toUpperCase();
-                            const p2 = String(m.player2_name || '').trim().toUpperCase();
-                            return p1 && p2 && p1 !== 'TBD' && p2 !== 'TBD';
-                          })
+                          if (m.match_id === selectedMatch?.match_id) return false;
+                          const p1 = String(m.player1_name || '').trim().toUpperCase();
+                          const p2 = String(m.player2_name || '').trim().toUpperCase();
+                          return p1 && p2 && p1 !== 'TBD' && p2 !== 'TBD';
+                        })
                         : [];
 
                       if (loading) {
