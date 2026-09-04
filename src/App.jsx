@@ -53,7 +53,7 @@ export default function App() {
       case '/events':
         return ['currentPlayer', 'getEvents'];
       case '/profile':
-        return ['currentPlayer', 'checkProfile', 'getLeaderboard', 'getMyDecks', 'getBeybladeParts'];
+        return ['currentPlayer', 'checkProfile', 'getSettings', 'getLeaderboard', 'getMyDecks', 'getBeybladeParts'];
       case '/admin':
         return ['currentPlayer', 'checkProfile', 'getEvents', 'getRules', 'getLeaderboard'];
       case '/arena':
@@ -340,11 +340,16 @@ export default function App() {
 
       results.forEach((result, index) => {
         const label = fetchLabels[index];
-        
+
         if (result.status === 'fulfilled') {
           hasAnySuccess = true;
           allFailed = false;
           statusMap[label] = { status: result.value.status, message: result.value.message };
+
+          // Tangkap hasil getSettings dan inject ke state
+          if (label === 'settings' && result.value) {
+            setSettings(result.value);
+          }
         } else {
           statusMap[label] = { status: 'error', message: result.reason?.message || 'Unknown error' };
         }
@@ -573,14 +578,20 @@ export default function App() {
   };
 
   const handleUpdateNickname = async (newNick) => {
+    if (!newNick || newNick.length < 3 || newNick.length > 20) {
+      return toast.error('Nickname harus 3-20 karakter!');
+    }
+    if (!/^[a-zA-Z0-9_]+$/.test(newNick)) {
+      return toast.error('Nickname hanya boleh huruf, angka, dan underscore!');
+    }
     setIsSubmitting(true);
     const payload = { googleId: user.sub, newNickname: newNick };
     const res = await postToGas('updateNickname', payload);
     if (res?.status === 'success') {
-      toast.success('Nickname diupdate!');
+      toast.success(res.message || 'Nickname diupdate!');
       await checkProfile();
     } else {
-      toast.error('Gagal update');
+      toast.error(res?.message || 'Gagal update nickname');
     }
     setIsSubmitting(false);
   };
@@ -630,7 +641,7 @@ export default function App() {
     const res = await postToGas('toggleNicknameSetting');
     if (res?.status === 'success') {
       toast.success('Pengaturan ganti nickname diupdate!');
-      const s = await getFromGas('getSettings');
+      const s = await getFromGas('getSettings', true);
       if (s) setSettings(s);
     } else {
       toast.error('Gagal update pengaturan');
@@ -985,7 +996,7 @@ export default function App() {
                   onGenerateTournament={handleGenerateTournament}
                   onUpdatePoints={handleUpdatePoints}
                   onToggleNickname={handleToggleNickname}
-                   nicknameAllowed={settings.allow_nickname_change === true || settings.allow_nickname_change === 'true'}
+                    nicknameAllowed={String(settings.allow_nickname_change || '').toLowerCase().trim() === 'true'}
                   leaderboard={leaderboard}
                   isSubmitting={isSubmitting}
                   isGenerating={isGenerating}
@@ -1187,7 +1198,7 @@ export default function App() {
                 onGenerateTournament={handleGenerateTournament}
                 onUpdatePoints={handleUpdatePoints}
                 onToggleNickname={handleToggleNickname}
-                nicknameAllowed={settings.allow_nickname_change === true || settings.allow_nickname_change === 'true'}
+                nicknameAllowed={String(settings.allow_nickname_change || '').toLowerCase().trim() === 'true'}
                 leaderboard={leaderboard}
                 rules={rules}
                 onRefreshRules={refreshRules}

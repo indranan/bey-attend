@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const GAS_URL = "https://script.google.com/macros/s/AKfycbyINSYdhyJjJ6rY6R6I3o0OwAyYpjhFChq1Vmq1V05kADxNVRQyTT2X6BGvk5905Xh_ng/exec";
+const GAS_URL = "https://script.google.com/macros/s/AKfycbztJ1FMuaFR_ilWF8LruxDTKNfsrwFon-3W0TZaii9n21TqC4BBMA__7n35S8zzxi95Kg/exec";
 
 const AXIOS_TIMEOUT = 15000;
 const LONG_RUNNING_TIMEOUT = 120000;

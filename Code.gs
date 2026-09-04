@@ -3772,6 +3772,29 @@ function updateNickname(data) {
   const sheet = SS.getSheetByName("Players");
   if (!sheet) return res({ status: "error", message: "Sheet Players tidak ditemukan" });
 
+  if (!data || !data.googleId || !data.newNickname) {
+    return res({ status: "error", message: "Data tidak lengkap" });
+  }
+
+  const newNick = String(data.newNickname).trim();
+  if (newNick.length < 3 || newNick.length > 20) {
+    return res({ status: "error", message: "Nickname harus 3-20 karakter!" });
+  }
+  if (!/^[a-zA-Z0-9_]+$/.test(newNick)) {
+    return res({ status: "error", message: "Nickname hanya boleh huruf, angka, dan underscore!" });
+  }
+
+  // Guard: cek izin ganti nickname dari sheet Settings
+  const settingsSheet = SS.getSheetByName("Settings");
+  if (settingsSheet) {
+    const sRows = settingsSheet.getDataRange().getValues();
+    const sIdx = sRows.findIndex(r => String(r[0]).toLowerCase() === "allow_nickname_change");
+    const allowed = sIdx !== -1 && String(sRows[sIdx][1]).toLowerCase() === "true";
+    if (!allowed) {
+      return res({ status: "error", message: "Ganti nickname sedang dinonaktifkan oleh Admin" });
+    }
+  }
+
   const rows = sheet.getDataRange().getValues();
   // Gunakan .toString() agar ID dari Google (string) cocok dengan ID di Sheet
   const rowIndex = rows.findIndex(row => row[0].toString() === data.googleId.toString());
@@ -3781,11 +3804,15 @@ function updateNickname(data) {
   }
 
   // Validasi: Cek apakah nickname baru sudah dipakai orang lain
-  const newNick = data.newNickname.trim();
   const isTaken = rows.some((row, index) => index !== rowIndex && row[3].toString().toLowerCase() === newNick.toLowerCase());
 
   if (isTaken) {
     return res({ status: "error", message: "Nickname sudah digunakan Blader lain!" });
+  }
+
+  // Tidak perlu update jika nickname sama dengan yang lama
+  if (rows[rowIndex][3].toString() === newNick) {
+    return res({ status: "success", message: "Nickname tidak berubah" });
   }
 
   // Update kolom D (4) untuk Nickname dan H (8) untuk Last Updated
@@ -4207,9 +4234,19 @@ function getSettings() {
   if (!sheet) return res({});
   const rows = sheet.getDataRange().getValues();
   const settings = {};
-  rows.forEach(r => {
-    if (r[0]) settings[r[0]] = r[1];
-  });
+  const seenKeys = new Set();
+  // Iterasi dari BAWAH ke ATAS agar nilai terbaru (yang biasanya di bawah)
+  // yang menang bila ada duplikat key
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const key = rows[i][0];
+    if (!key) continue;
+    const normalizedKey = String(key).trim();
+    if (!normalizedKey || seenKeys.has(normalizedKey.toLowerCase())) continue;
+    seenKeys.add(normalizedKey.toLowerCase());
+    let value = rows[i][1];
+    if (typeof value === 'string') value = value.trim();
+    settings[normalizedKey] = value;
+  }
   return res(settings);
 }
 

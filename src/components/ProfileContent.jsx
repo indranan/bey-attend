@@ -5,6 +5,7 @@ import PhotoUploader from './PhotoUploader';
 import UserAvatar from './UserAvatar';
 import PublicNavbar from './PublicNavbar';
 import MyDecks from './MyDecks';
+import { getFromGas } from '../utils/api';
 
 const fadeUp = {
   hidden: { opacity: 0, y: 20 },
@@ -21,6 +22,7 @@ const ProfileContent = ({ blader, user, settings = {}, leaderboard = [], onUpdat
   const [editNick, setEditNick] = useState(blader?.nickname || '');
   const [slogan, setSlogan] = useState(blader?.slogan || '');
   const [catatan, setCatatan] = useState(blader?.catatan || '');
+  const [localSettings, setLocalSettings] = useState({});
 
   useEffect(() => {
     setEditNick(blader?.nickname || '');
@@ -28,13 +30,30 @@ const ProfileContent = ({ blader, user, settings = {}, leaderboard = [], onUpdat
     setCatatan(blader?.catatan || '');
   }, [blader?.nickname, blader?.slogan, blader?.catatan]);
 
+  // Fetch settings langsung dari GAS agar halaman ini self-sufficient
+  // dan tidak bergantung state dari parent (berguna saat dibuka di tab baru)
+  useEffect(() => {
+    let cancelled = false;
+    const loadSettings = async () => {
+      try {
+        const data = await getFromGas('getSettings', true);
+        if (!cancelled && data) setLocalSettings(data);
+      } catch (e) {
+        // silent fail
+      }
+    };
+    loadSettings();
+    return () => { cancelled = true; };
+  }, []);
+
   const safeLeaderboard = Array.isArray(leaderboard) ? leaderboard : [];
   const myRankIndex = safeLeaderboard.findIndex((item) => String(item.googleId || '') === String(user?.sub || ''));
   const myRank = myRankIndex !== -1 ? myRankIndex + 1 : '--';
   const myStats = myRankIndex !== -1 ? safeLeaderboard[myRankIndex] : null;
 
   const photo = blader?.foto || blader?.photo || user?.picture || '';
-  const nicknameAllowed = settings.allow_nickname_change === true || settings.allow_nickname_change === 'true';
+  const mergedSettings = { ...localSettings, ...settings };
+  const nicknameAllowed = String(mergedSettings.allow_nickname_change || '').toLowerCase().trim() === 'true';
 
   if (!blader) {
     return (
@@ -51,8 +70,9 @@ const ProfileContent = ({ blader, user, settings = {}, leaderboard = [], onUpdat
   }
 
   const handleSave = async () => {
-    if (editNick.length < 3) return;
-    await onUpdateNickname(editNick);
+    const trimmed = editNick.trim();
+    if (trimmed.length < 3) return;
+    await onUpdateNickname(trimmed);
     setIsEditingNick(false);
   };
 
@@ -98,7 +118,8 @@ const ProfileContent = ({ blader, user, settings = {}, leaderboard = [], onUpdat
                 <div className="space-y-3">
                   <input
                     value={editNick}
-                    onChange={(e) => setEditNick(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''))}
+                    maxLength={20}
+                    onChange={(e) => setEditNick(e.target.value.replace(/[^a-zA-Z0-9_]/g, '').slice(0, 20))}
                     className="w-full p-3 bg-gray-800 border-2 border-primary rounded-xl text-center font-bold outline-none dark:text-white"
                   />
                   <div className="flex gap-2">
