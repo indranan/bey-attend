@@ -143,10 +143,10 @@ export default function MyDecks({ user }) {
   const [allDecks, setAllDecks] = useState([]);
   const [parts, setParts] = useState([]);
   const [loading, setLoading] = useState(true);
-  
+
   // STATE BARU: Menggantikan showForm untuk Inline Editing
   const [isAddingNew, setIsAddingNew] = useState(false);
-  
+
   const [editingDeck, setEditingDeck] = useState(null);
   const [form, setForm] = useState(emptyDeckForm);
   const [filter, setFilter] = useState('active');
@@ -157,7 +157,7 @@ export default function MyDecks({ user }) {
   const [activePicker, setActivePicker] = useState(null);
   const [deckToDelete, setDeckToDelete] = useState(null);
   const [showInlineDiscardConfirm, setShowInlineDiscardConfirm] = useState(false);
-  
+
   const initialFormRef = useRef(null);
   const deckNameRef = useRef(null);
 
@@ -326,9 +326,16 @@ export default function MyDecks({ user }) {
     setForm(prev => ({
       ...prev,
       system: newSystem,
-      lockChip: newSystem === 'CX' ? prev.lockChip : '',
-      overBlade: newSystem === 'CX' ? prev.overBlade : '',
-      assistBlade: newSystem === 'CX' ? prev.assistBlade : '',
+
+      // Pergantian system = mulai konfigurasi equipment dari awal.
+      // Semua field equipment lama dibersihkan agar tidak ada data
+      // dari CX yang "kecantol" saat berpindah ke BX/UX, atau sebaliknya.
+      lockChip: '',
+      blade: '',
+      overBlade: '',
+      assistBlade: '',
+      ratchet: '',
+      bit: '',
     }));
   };
 
@@ -484,15 +491,53 @@ export default function MyDecks({ user }) {
 
     setIsCreating(true);
     try {
+      const bladeForPayload = form.blade ? partsMap[form.blade] : null;
+      const payloadRules = getBladeRules(bladeForPayload);
+      const payloadBit = form.bit ? partsMap[form.bit] : null;
+      const payloadBitRules = getBladeRules(payloadBit);
+
+      // Sanitasi terakhir sebelum dikirim ke backend.
+      // Field yang tidak relevan dengan system/rule Blade tidak pernah ikut tersimpan.
+      const safeLockChip =
+        form.system === 'CX' ? form.lockChip : '';
+
+      const safeOverBlade =
+        form.system === 'CX' && payloadRules.hasOverBlade
+          ? form.overBlade
+          : '';
+
+      const safeAssistBlade =
+        form.system === 'CX'
+          ? form.assistBlade
+          : '';
+
+      const safeRatchet =
+        payloadRules.integratedRatchet ||
+        payloadRules.integratedRatchetBit ||
+        payloadBitRules.integratedRatchet ||
+        payloadBitRules.integratedRatchetBit
+          ? ''
+          : form.ratchet;
+
+      const safeBit =
+        payloadRules.integratedRatchetBit ||
+        (
+          payloadRules.integratedRatchet &&
+          (payloadBitRules.integratedRatchet ||
+            payloadBitRules.integratedRatchetBit)
+        )
+          ? ''
+          : form.bit;
+
       const payload = {
         deckName: form.deckName.trim(),
         system: form.system,
-        lockChip: form.lockChip,
+        lockChip: safeLockChip,
         blade: form.blade,
-        overBlade: form.overBlade,
-        assistBlade: form.assistBlade,
-        ratchet: form.ratchet,
-        bit: form.bit,
+        overBlade: safeOverBlade,
+        assistBlade: safeAssistBlade,
+        ratchet: safeRatchet,
+        bit: safeBit,
         description: form.description.trim(),
         isActive: form.isActive,
         googleId: googleId
@@ -668,11 +713,10 @@ export default function MyDecks({ user }) {
                   key={sys}
                   type="button"
                   onClick={() => handleSystemChange(sys)}
-                  className={`py-3 lg:py-2.5 rounded-xl font-black uppercase italic text-xs transition-all active:scale-95 ${
-                    form.system === sys
+                  className={`py-3 lg:py-2.5 rounded-xl font-black uppercase italic text-xs transition-all active:scale-95 ${form.system === sys
                       ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/30'
                       : 'bg-gray-900 text-gray-500'
-                  }`}
+                    }`}
                 >
                   {sys}
                 </button>
@@ -687,22 +731,20 @@ export default function MyDecks({ user }) {
                 type="button"
                 onClick={() => setForm(prev => ({ ...prev, isActive: 'TRUE' }))}
                 disabled={counts.active >= 3 && form.isActive !== 'TRUE'}
-                className={`py-2 rounded-xl font-black uppercase italic text-[10px] transition-all active:scale-95 ${
-                  form.isActive === 'TRUE'
+                className={`py-2 rounded-xl font-black uppercase italic text-[10px] transition-all active:scale-95 ${form.isActive === 'TRUE'
                     ? 'bg-green-500 text-white shadow-lg shadow-green-500/30'
                     : 'bg-gray-900 text-gray-500'
-                }`}
+                  }`}
               >
                 ACTIVE
               </button>
               <button
                 type="button"
                 onClick={() => setForm(prev => ({ ...prev, isActive: 'FALSE' }))}
-                className={`py-2 rounded-xl font-black uppercase italic text-[10px] transition-all active:scale-95 ${
-                  form.isActive === 'FALSE'
+                className={`py-2 rounded-xl font-black uppercase italic text-[10px] transition-all active:scale-95 ${form.isActive === 'FALSE'
                     ? 'bg-gray-500 text-white shadow-lg shadow-gray-500/30'
                     : 'bg-gray-900 text-gray-500'
-                }`}
+                  }`}
               >
                 RESERVE
               </button>
@@ -822,11 +864,10 @@ export default function MyDecks({ user }) {
               key={tab}
               type="button"
               onClick={() => setFilter(tab)}
-              className={`flex-1 py-2 rounded-xl font-black uppercase italic text-[10px] transition-all active:scale-95 ${
-                filter === tab
+              className={`flex-1 py-2 rounded-xl font-black uppercase italic text-[10px] transition-all active:scale-95 ${filter === tab
                   ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/30'
                   : 'bg-gray-100 dark:bg-gray-800 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
-              }`}
+                }`}
             >
               {tab === 'active' ? `ACTIVE (${counts.active})` : tab === 'reserve' ? `RESERVE (${counts.reserve})` : `ALL (${counts.total})`}
             </button>
@@ -867,7 +908,7 @@ export default function MyDecks({ user }) {
           ) : (
             <AnimatePresence>
               {visibleDecks.map((deck, idx) => {
-                
+
                 // AREA INLINE EDIT: Menggantikan kartu display dengan form jika deck ini sedang diedit
                 if (isEditingDeckId === deck.deckId) {
                   return (
@@ -907,9 +948,8 @@ export default function MyDecks({ user }) {
                     variants={fadeUp}
                     initial="hidden"
                     animate="visible"
-                    className={`flex flex-col lg:flex-row gap-6 p-5 bg-[#161b22] rounded-2xl border border-gray-800 shadow-xl relative transition-all ${
-                      isProcessing ? 'border-blue-500/50 opacity-90' : ''
-                    }`}
+                    className={`flex flex-col lg:flex-row gap-6 p-5 bg-[#161b22] rounded-2xl border border-gray-800 shadow-xl relative transition-all ${isProcessing ? 'border-blue-500/50 opacity-90' : ''
+                      }`}
                   >
                     <button
                       type="button"
@@ -925,30 +965,30 @@ export default function MyDecks({ user }) {
                         <div className="col-span-2 flex items-center justify-center p-8 bg-black/30 rounded-xl border border-white/5">
                           <p className="text-xs text-gray-500 font-bold uppercase tracking-widest">No visual parts available.</p>
                         </div>
-                        ) : (
-                          visualParts.map((part, pIdx) => {
-                            const isHero = pIdx === 0;
-                            return (
-                              <div
-                                key={part.partId || pIdx}
-                                className={`${isHero ? 'col-span-2 lg:col-span-1 lg:row-span-2 bg-black/30 rounded-xl p-4 relative overflow-hidden flex items-center justify-center border border-white/5 aspect-square lg:aspect-auto min-h-[250px] group' : 'col-span-1 bg-black/30 rounded-xl p-3 relative overflow-hidden flex items-center justify-center border border-white/5 aspect-square group'}`}
-                              >
-                                {getPartImage(part) ? (
-                                  <img
-                                    src={getPartImage(part)}
-                                    alt={part.name}
-                                    className={`w-full h-full object-contain ${isHero ? 'drop-shadow-2xl transition-transform duration-300 scale-[1.5] group-hover:scale-[1.65]' : 'drop-shadow-xl transition-transform duration-300 scale-[1.6] group-hover:scale-[1.8]'}`}
-                                    onError={(e) => { e.target.style.display = 'none'; }}
-                                  />
-                                ) : (
-                                  <div className="w-full h-full min-h-[80px] flex items-center justify-center text-gray-400 text-2xl font-black">
-                                    {part.name?.charAt(0) || '?'}
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })
-                        )}
+                      ) : (
+                        visualParts.map((part, pIdx) => {
+                          const isHero = pIdx === 0;
+                          return (
+                            <div
+                              key={part.partId || pIdx}
+                              className={`${isHero ? 'col-span-2 lg:col-span-1 lg:row-span-2 bg-black/30 rounded-xl p-4 relative overflow-hidden flex items-center justify-center border border-white/5 aspect-square lg:aspect-auto min-h-[250px] group' : 'col-span-1 bg-black/30 rounded-xl p-3 relative overflow-hidden flex items-center justify-center border border-white/5 aspect-square group'}`}
+                            >
+                              {getPartImage(part) ? (
+                                <img
+                                  src={getPartImage(part)}
+                                  alt={part.name}
+                                  className={`w-full h-full object-contain ${isHero ? 'drop-shadow-2xl transition-transform duration-300 scale-[1.5] group-hover:scale-[1.65]' : 'drop-shadow-xl transition-transform duration-300 scale-[1.6] group-hover:scale-[1.8]'}`}
+                                  onError={(e) => { e.target.style.display = 'none'; }}
+                                />
+                              ) : (
+                                <div className="w-full h-full min-h-[80px] flex items-center justify-center text-gray-400 text-2xl font-black">
+                                  {part.name?.charAt(0) || '?'}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })
+                      )}
                     </div>
 
                     {/* RIGHT: Detail */}
@@ -1008,11 +1048,10 @@ export default function MyDecks({ user }) {
                             type="button"
                             onClick={() => handleToggleActive(deck)}
                             disabled={isProcessing}
-                            className={`flex-1 py-2.5 rounded-xl font-black uppercase italic text-[10px] shadow-lg active:scale-95 transition-all disabled:opacity-50 flex items-center justify-center gap-1 ${
-                              deck.isActive
+                            className={`flex-1 py-2.5 rounded-xl font-black uppercase italic text-[10px] shadow-lg active:scale-95 transition-all disabled:opacity-50 flex items-center justify-center gap-1 ${deck.isActive
                                 ? 'bg-orange-500 text-white shadow-orange-500/20'
                                 : 'bg-green-500 text-white shadow-green-500/20'
-                            }`}
+                              }`}
                           >
                             {isProcessing ? (
                               <Loader2 className="animate-spin" size={12} />
@@ -1053,8 +1092,8 @@ export default function MyDecks({ user }) {
             >
               <div className="sticky top-0 z-10 p-4 border-b border-gray-800 flex justify-between items-center bg-[#161b22] rounded-t-3xl">
                 <h3 className="text-sm font-black text-white uppercase tracking-widest">Select {activePicker.replace(/([A-Z])/g, ' $1').trim()}</h3>
-                <button 
-                  onClick={() => setActivePicker(null)} 
+                <button
+                  onClick={() => setActivePicker(null)}
                   className="p-3 rounded-full hover:bg-gray-800 text-gray-400 active:scale-95 transition-all"
                 >
                   <X size={20} />
@@ -1063,11 +1102,11 @@ export default function MyDecks({ user }) {
 
               <div className="flex-1 overflow-y-auto p-4 grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 content-start [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-thumb]:bg-gray-600 [&::-webkit-scrollbar-track]:bg-transparent">
                 {getFilteredParts(
-                  activePicker === 'lockChip' ? 'LOCK_CHIP' : activePicker === 'overBlade' ? 'OVER_BLADE' : activePicker === 'assistBlade' ? 'ASSIST_BLADE' : activePicker.toUpperCase(), 
+                  activePicker === 'lockChip' ? 'LOCK_CHIP' : activePicker === 'overBlade' ? 'OVER_BLADE' : activePicker === 'assistBlade' ? 'ASSIST_BLADE' : activePicker.toUpperCase(),
                   form.system
                 ).map(part => (
-                  <div 
-                    key={part.partId} 
+                  <div
+                    key={part.partId}
                     onClick={() => {
                       if (isPartUsedByAnotherActiveDeck(part.partId)) {
                         toast.error('Part ini sudah dipakai oleh active deck lain.');
@@ -1092,30 +1131,14 @@ export default function MyDecks({ user }) {
                         const next = { ...prev, [activePicker]: part.partId };
 
                         if (activePicker === 'blade') {
-                          const rules = getBladeRules(part);
-
-                          if (next.system !== 'CX' || !rules.hasOverBlade) {
-                            next.overBlade = '';
-                          }
-
-                          if (rules.integratedRatchetBit) {
-                            next.ratchet = '';
-                            next.bit = '';
-                          } else if (rules.integratedRatchet) {
-                            next.ratchet = '';
-
-                            // Bila Bit sebelumnya ternyata juga membawa Ratchet,
-                            // kosongkan agar user memilih Bit yang kompatibel.
-                            const currentBit = partsMap[next.bit];
-                            const currentBitRules = getBladeRules(currentBit);
-
-                            if (
-                              currentBit &&
-                              (currentBitRules.integratedRatchet || currentBitRules.integratedRatchetBit)
-                            ) {
-                              next.bit = '';
-                            }
-                          }
+                          // Ganti Blade = reset semua equipment yang bergantung
+                          // pada Blade lama. Ini mencegah data CX/BX/UX lama
+                          // tetap tersimpan walaupun slot-nya sudah tidak terlihat.
+                          next.lockChip = '';
+                          next.overBlade = '';
+                          next.assistBlade = '';
+                          next.ratchet = '';
+                          next.bit = '';
                         }
 
                         if (activePicker === 'bit') {
