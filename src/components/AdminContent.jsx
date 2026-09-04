@@ -8,8 +8,28 @@ import ConfirmModal from './ConfirmModal';
 import PublicNavbar from './PublicNavbar';
 import AdminPartsManager from './AdminPartsManager';
 
-const AdminContent = ({ user, onCreateEvent, onGenerateTournament, onUpdatePoints, onToggleNickname, nicknameAllowed, leaderboard, isSubmitting, isGenerating, isUpdatingPoints, eventId, currentEvent, events = [], rules = [], onRefreshRules, onRefreshEvent, onStartEvent, onEndEvent, onFinishTournament, onEditEvent }) => {
+const AdminContent = ({ user, onCreateEvent, onGenerateTournament, onUpdatePoints, onToggleNickname, nicknameAllowed: nicknameAllowedProp, leaderboard, isSubmitting, isGenerating, isUpdatingPoints, eventId, currentEvent, events = [], rules = [], onRefreshRules, onRefreshEvent, onStartEvent, onEndEvent, onFinishTournament, onEditEvent }) => {
   const [format, setFormat] = useState('weekly');
+  const [localSettings, setLocalSettings] = useState({});
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadSettings = async () => {
+      try {
+        const data = await getFromGas('getSettings', true);
+        if (!cancelled && data) setLocalSettings(data);
+      } catch (e) {}
+    };
+    loadSettings();
+    return () => { cancelled = true; };
+  }, []);
+
+  const nicknameAllowed = (() => {
+    if (nicknameAllowedProp === true) return true;
+    const fromLocal = String(localSettings.allow_nickname_change || '').toLowerCase().trim() === 'true';
+    if (fromLocal) return true;
+    return String(nicknameAllowedProp || '').toLowerCase().trim() === 'true';
+  })();
   const [newSwissRounds, setNewSwissRounds] = useState(3);
   const [selectedId, setSelectedId] = useState('');
   const [point, setPoint] = useState('');
@@ -740,7 +760,13 @@ const AdminContent = ({ user, onCreateEvent, onGenerateTournament, onUpdatePoint
               </button>
               <button
                 type="button"
-                onClick={onToggleNickname}
+                onClick={async () => {
+                  await onToggleNickname?.();
+                  try {
+                    const data = await getFromGas('getSettings', true);
+                    if (data) setLocalSettings(data);
+                  } catch (e) {}
+                }}
                 disabled={isSubmitting}
                 className={quickButton(nicknameAllowed ? 'bg-green-500/15 text-green-300 border border-green-500/20' : 'border border-white/10 bg-white/5 text-gray-300')}
               >
