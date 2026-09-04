@@ -2,6 +2,7 @@
   "appId": "com.lalapan.beylamongan",
   "appName": "Lalapan Bey Lmg",
   "webDir": "dist",
+
   "plugins": {
     "GoogleAuth": {
       "clientId": "323729858315-uppbl49gqf4crr4qu51tt295djr3h0s9.apps.googleusercontent.com",
@@ -11,6 +12,14 @@
       ],
       "forceCodeForRefreshToken": true
     },
+
+    "SystemBars": {
+      "insetsHandling": "css",
+      "style": "DARK",
+      "hidden": false,
+      "animation": "NONE"
+    },
+
     "SplashScreen": {
       "launchShowDuration": 0,
       "launchAutoHide": true,

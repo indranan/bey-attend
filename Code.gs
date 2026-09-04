@@ -649,6 +649,7 @@ function doGet(e) {
       case 'test': return res({ status: 'ok', message: 'GAS connected' });
       case 'getBlader': return getBlader(googleId);
       case 'getBladers': return getBladers();
+      case 'getActiveDecksByGoogleId': return getActiveDecksByGoogleId(e.parameter.googleId);
       case 'checkNickname': return checkNickname(nickname);
       case 'getEvent': return res(fetchActiveEvent());
       case 'getEvents': return getEvents();
@@ -1477,20 +1478,49 @@ function getBeybladeParts() {
   const partTypeCol = headerMap['part_type'];
   const nameCol = headerMap['name'];
   const isActiveCol = headerMap['is_active'];
+  const hasOverBladeCol =
+    headerMap['has_over_blade'] !== undefined
+      ? headerMap['has_over_blade']
+      : headerMap['hasoverblade'] !== undefined
+        ? headerMap['hasoverblade']
+        : headerMap['over_blade'] !== undefined
+          ? headerMap['over_blade']
+          : undefined;
 
+  const integratedRatchetCol =
+    headerMap['integrated_ratchet'] !== undefined
+      ? headerMap['integrated_ratchet']
+      : headerMap['integratedratchet'] !== undefined
+        ? headerMap['integratedratchet']
+        : undefined;
+
+  const integratedRatchetBitCol =
+    headerMap['integrated_ratchet_bit'] !== undefined
+      ? headerMap['integrated_ratchet_bit']
+      : headerMap['integratedratchetbit'] !== undefined
+        ? headerMap['integratedratchetbit']
+        : undefined;
+
+  const parseBoolean = (value) => {
+    const s = String(value ?? '').trim().toLowerCase();
+    return s === 'true' || s === '1' || s === 'yes' || s === 'ya';
+  };
   const parts = rows.map(row => {
     const partId = partIdCol !== undefined ? String(row[partIdCol] || '').trim() : '';
     const system = systemCol !== undefined ? String(row[systemCol] || '').trim() : '';
     const partType = partTypeCol !== undefined ? String(row[partTypeCol] || '').trim() : '';
     const name = nameCol !== undefined ? String(row[nameCol] || '').trim() : '';
-    const isActive = isActiveCol !== undefined ? String(row[isActiveCol] || '').toLowerCase().trim() === 'true' : true;
+    const isActive = isActiveCol !== undefined ? parseBoolean(row[isActiveCol]) : true;
 
     return {
       partId,
       system,
       partType,
       name,
-      isActive
+      isActive,
+      hasOverBlade: hasOverBladeCol !== undefined ? parseBoolean(row[hasOverBladeCol]) : false,
+      integratedRatchet: integratedRatchetCol !== undefined ? parseBoolean(row[integratedRatchetCol]) : false,
+      integratedRatchetBit: integratedRatchetBitCol !== undefined ? parseBoolean(row[integratedRatchetBitCol]) : false
     };
   }).filter(p => p.partId);
 
@@ -1516,7 +1546,33 @@ function getBeybladePartsMap() {
   const partTypeCol = headerMap['part_type'];
   const nameCol = headerMap['name'];
   const isActiveCol = headerMap['is_active'];
+  const hasOverBladeCol =
+    headerMap['has_over_blade'] !== undefined
+      ? headerMap['has_over_blade']
+      : headerMap['hasoverblade'] !== undefined
+        ? headerMap['hasoverblade']
+        : headerMap['over_blade'] !== undefined
+          ? headerMap['over_blade']
+          : undefined;
 
+  const integratedRatchetCol =
+    headerMap['integrated_ratchet'] !== undefined
+      ? headerMap['integrated_ratchet']
+      : headerMap['integratedratchet'] !== undefined
+        ? headerMap['integratedratchet']
+        : undefined;
+
+  const integratedRatchetBitCol =
+    headerMap['integrated_ratchet_bit'] !== undefined
+      ? headerMap['integrated_ratchet_bit']
+      : headerMap['integratedratchetbit'] !== undefined
+        ? headerMap['integratedratchetbit']
+        : undefined;
+
+  const parseBoolean = (value) => {
+    const s = String(value ?? '').trim().toLowerCase();
+    return s === 'true' || s === '1' || s === 'yes' || s === 'ya';
+  };
   const map = {};
   const seen = {};
   const duplicates = [];
@@ -1526,7 +1582,7 @@ function getBeybladePartsMap() {
     const system = systemCol !== undefined ? String(row[systemCol] || '').trim() : '';
     const partType = partTypeCol !== undefined ? String(row[partTypeCol] || '').trim() : '';
     const name = nameCol !== undefined ? String(row[nameCol] || '').trim() : '';
-    const isActive = isActiveCol !== undefined ? String(row[isActiveCol] || '').toLowerCase().trim() === 'true' : true;
+    const isActive = isActiveCol !== undefined ? parseBoolean(row[isActiveCol]) : true;
 
     if (seen[partId]) {
       duplicates.push(partId);
@@ -1538,7 +1594,16 @@ function getBeybladePartsMap() {
       system,
       partType,
       name,
-      isActive
+      isActive,
+      hasOverBlade: hasOverBladeCol !== undefined
+        ? parseBoolean(row[hasOverBladeCol])
+        : false,
+      integratedRatchet: integratedRatchetCol !== undefined
+        ? parseBoolean(row[integratedRatchetCol])
+        : false,
+      integratedRatchetBit: integratedRatchetBitCol !== undefined
+        ? parseBoolean(row[integratedRatchetBitCol])
+        : false
     };
   });
 
@@ -1547,6 +1612,114 @@ function getBeybladePartsMap() {
   }
 
   return map;
+}
+
+
+function getActiveDecksByGoogleId(googleId) {
+  try {
+    const targetGoogleId = String(googleId || '').trim();
+    if (!targetGoogleId) {
+      return res({ status: 'error', message: 'googleId wajib diisi', decks: [] });
+    }
+
+    const playerSheet = SS.getSheetByName('Players');
+    if (!playerSheet) {
+      return res({ status: 'success', decks: [] });
+    }
+
+    const playerValues = playerSheet.getDataRange().getDisplayValues();
+    if (playerValues.length < 2) {
+      return res({ status: 'success', decks: [] });
+    }
+
+    const playerHeaders = playerValues[0].map(h => String(h || '').toLowerCase().trim());
+    const playerIdCol = playerHeaders.indexOf('google_id') >= 0
+      ? playerHeaders.indexOf('google_id')
+      : playerHeaders.indexOf('googleid');
+
+    if (playerIdCol < 0) {
+      return res({ status: 'error', message: 'Kolom google_id tidak ditemukan di Players', decks: [] });
+    }
+
+    const playerExists = playerValues.slice(1).some(row =>
+      String(row[playerIdCol] || '').trim() === targetGoogleId
+    );
+
+    if (!playerExists) {
+      return res({ status: 'error', message: 'Player tidak ditemukan', decks: [] });
+    }
+
+    const deckSheet = SS.getSheetByName('BladerDecks');
+    if (!deckSheet) {
+      return res({ status: 'success', decks: [] });
+    }
+
+    const values = deckSheet.getDataRange().getDisplayValues();
+    if (values.length < 2) {
+      return res({ status: 'success', decks: [] });
+    }
+
+    const headers = values[0].map(h => String(h || '').toLowerCase().trim());
+    const col = (name) => headers.indexOf(name);
+
+    const googleIdCol = col('google_id');
+    const deckIdCol = col('deck_id');
+    const deckNameCol = col('deck_name');
+    const systemCol = col('system');
+    const lockChipCol = col('lock_chip');
+    const bladeCol = col('blade');
+    const overBladeCol = col('over_blade');
+    const assistBladeCol = col('assist_blade');
+    const ratchetCol = col('ratchet');
+    const bitCol = col('bit');
+    const descriptionCol = col('description');
+    const isActiveCol = col('is_active');
+
+    if (googleIdCol < 0) {
+      return res({ status: 'error', message: 'Kolom google_id tidak ditemukan di BladerDecks', decks: [] });
+    }
+
+    const partsMap = getBeybladePartsMap();
+    const resolvePart = (partId) => {
+      const id = String(partId || '').trim();
+      if (!id) return null;
+      const part = partsMap[id];
+      return part
+        ? { partId: part.partId, name: part.name, partType: part.partType }
+        : { partId: id, name: id, partType: '' };
+    };
+
+    const decks = [];
+    values.slice(1).forEach(row => {
+      const rowGoogleId = String(row[googleIdCol] || '').trim();
+      if (rowGoogleId !== targetGoogleId) return;
+
+      const isActive = isActiveCol >= 0
+        ? String(row[isActiveCol] || '').trim().toLowerCase() === 'true'
+        : false;
+
+      if (!isActive) return;
+
+      decks.push({
+        deckId: deckIdCol >= 0 ? String(row[deckIdCol] || '').trim() : '',
+        deckName: deckNameCol >= 0 ? String(row[deckNameCol] || '').trim() : '',
+        system: systemCol >= 0 ? String(row[systemCol] || '').trim() : '',
+        lockChip: lockChipCol >= 0 ? resolvePart(row[lockChipCol]) : null,
+        blade: bladeCol >= 0 ? resolvePart(row[bladeCol]) : null,
+        overBlade: overBladeCol >= 0 ? resolvePart(row[overBladeCol]) : null,
+        assistBlade: assistBladeCol >= 0 ? resolvePart(row[assistBladeCol]) : null,
+        ratchet: ratchetCol >= 0 ? resolvePart(row[ratchetCol]) : null,
+        bit: bitCol >= 0 ? resolvePart(row[bitCol]) : null,
+        description: descriptionCol >= 0 ? String(row[descriptionCol] || '').trim() : '',
+        isActive: true
+      });
+    });
+
+    return res({ status: 'success', googleId: targetGoogleId, decks });
+  } catch (err) {
+    console.error('getActiveDecksByGoogleId error: ' + err.message);
+    return res({ status: 'error', message: 'Gagal memuat deck juara', decks: [] });
+  }
 }
 
 function getMyDecks(data) {
@@ -2738,7 +2911,20 @@ function getBladerProfile(data) {
     tournamentSummary: {
       tournamentsPlayed: tournamentsPlayed
     },
-    recentResults: recentResults
+    recentResults: recentResults,
+    activeDecks: (() => {
+      try {
+        const deckResponse = getActiveDecksByGoogleId(googleId);
+        const raw = deckResponse && typeof deckResponse.getContent === 'function'
+          ? deckResponse.getContent()
+          : '';
+        const parsed = raw ? JSON.parse(raw) : {};
+        return Array.isArray(parsed.decks) ? parsed.decks.slice(0, 3) : [];
+      } catch (deckErr) {
+        Logger.log('[PROFILE] ACTIVE DECKS ERROR: ' + deckErr.toString());
+        return [];
+      }
+    })()
   });
 }
 
@@ -3679,6 +3865,65 @@ function checkNickname(nickname) {
   return res({ available: !exists });
 }
 
+
+// Cache foto Google ke Drive agar akun baru tidak bergantung
+// pada URL lh3.googleusercontent.com sebagai URL permanen.
+function cacheGoogleProfilePhoto_(googleId, sourceUrl) {
+  try {
+    const id = String(googleId || '').trim();
+    const url = String(sourceUrl || '').trim();
+
+    if (!id || !url) return '';
+    if (!/googleusercontent\.com/i.test(url)) return '';
+
+    const folder = getLalapanFolder_();
+    const fileName = id + '_profile.png';
+
+    // Jika sudah pernah dicache, gunakan file komunitas yang sama.
+    const existing = folder.getFilesByName(fileName);
+    if (existing.hasNext()) {
+      const existingFile = existing.next();
+      existingFile.setSharing(
+        DriveApp.Access.ANYONE_WITH_LINK,
+        DriveApp.Permission.VIEW
+      );
+      return 'https://drive.google.com/thumbnail?id=' +
+        existingFile.getId() + '&sz=w1000';
+    }
+
+    const response = UrlFetchApp.fetch(url, {
+      muteHttpExceptions: true,
+      followRedirects: true
+    });
+
+    const status = response.getResponseCode();
+    if (status < 200 || status >= 300) {
+      Logger.log('[PHOTO CACHE] HTTP ' + status);
+      return '';
+    }
+
+    const blob = response.getBlob();
+    const contentType = String(blob.getContentType() || '');
+    if (!contentType.startsWith('image/')) {
+      Logger.log('[PHOTO CACHE] Response bukan image: ' + contentType);
+      return '';
+    }
+
+    blob.setName(fileName);
+    const file = folder.createFile(blob);
+    file.setSharing(
+      DriveApp.Access.ANYONE_WITH_LINK,
+      DriveApp.Permission.VIEW
+    );
+
+    return 'https://drive.google.com/thumbnail?id=' +
+      file.getId() + '&sz=w1000';
+  } catch (err) {
+    Logger.log('[PHOTO CACHE] ' + err.toString());
+    return '';
+  }
+}
+
 function createProfile(data) {
   const sheet = SS.getSheetByName("Players");
   const nicknameTrimmed = data.nickname.trim();
@@ -3691,12 +3936,16 @@ function createProfile(data) {
 
   const publicProfileId = generateShortId();
 
+  const stablePhotoUrl =
+    cacheGoogleProfilePhoto_(data.googleId, data.photoUrl) ||
+    String(data.photoUrl || '');
+
   sheet.appendRow([
     data.googleId,
     data.email,
     data.googleName,
     nicknameTrimmed,
-    data.photoUrl,
+    stablePhotoUrl,
     "Blader",
     new Date(), // Join Date
     new Date(), // Last Updated
@@ -3772,6 +4021,37 @@ function updateNickname(data) {
   const sheet = SS.getSheetByName("Players");
   if (!sheet) return res({ status: "error", message: "Sheet Players tidak ditemukan" });
 
+  const rows = sheet.getDataRange().getValues();
+  // Gunakan .toString() agar ID dari Google (string) cocok dengan ID di Sheet
+  const rowIndex = rows.findIndex(row => row[0].toString() === data.googleId.toString());
+
+  if (rowIndex === -1) {
+    return res({ status: "error", message: "Profil tidak ditemukan di database" });
+  }
+
+  // Validasi: Cek apakah nickname baru sudah dipakai orang lain
+  const newNick = data.newNickname.trim();
+  const isTaken = rows.some((row, index) => index !== rowIndex && row[3].toString().toLowerCase() === newNick.toLowerCase());
+
+  if (isTaken) {
+    return res({ status: "error", message: "Nickname sudah digunakan Blader lain!" });
+  }
+
+  // Tidak perlu update jika nickname sama dengan yang lama
+  if (rows[rowIndex][3].toString() === newNick) {
+    return res({ status: "success", message: "Nickname tidak berubah" });
+  }
+  // Update kolom D (4) untuk Nickname dan H (8) untuk Last Updated
+  sheet.getRange(rowIndex + 1, 4).setValue(newNick);
+  sheet.getRange(rowIndex + 1, 8).setValue(new Date());
+
+  return res({ status: "success" });
+}
+
+function createEvent(data) {
+  const sheet = SS.getSheetByName("Events");
+  if (!sheet) return res({ status: "error", message: "Sheet Events tidak ditemukan" });
+
   if (!data || !data.googleId || !data.newNickname) {
     return res({ status: "error", message: "Data tidak lengkap" });
   }
@@ -3794,37 +4074,6 @@ function updateNickname(data) {
       return res({ status: "error", message: "Ganti nickname sedang dinonaktifkan oleh Admin" });
     }
   }
-
-  const rows = sheet.getDataRange().getValues();
-  // Gunakan .toString() agar ID dari Google (string) cocok dengan ID di Sheet
-  const rowIndex = rows.findIndex(row => row[0].toString() === data.googleId.toString());
-
-  if (rowIndex === -1) {
-    return res({ status: "error", message: "Profil tidak ditemukan di database" });
-  }
-
-  // Validasi: Cek apakah nickname baru sudah dipakai orang lain
-  const isTaken = rows.some((row, index) => index !== rowIndex && row[3].toString().toLowerCase() === newNick.toLowerCase());
-
-  if (isTaken) {
-    return res({ status: "error", message: "Nickname sudah digunakan Blader lain!" });
-  }
-
-  // Tidak perlu update jika nickname sama dengan yang lama
-  if (rows[rowIndex][3].toString() === newNick) {
-    return res({ status: "success", message: "Nickname tidak berubah" });
-  }
-
-  // Update kolom D (4) untuk Nickname dan H (8) untuk Last Updated
-  sheet.getRange(rowIndex + 1, 4).setValue(newNick);
-  sheet.getRange(rowIndex + 1, 8).setValue(new Date());
-
-  return res({ status: "success" });
-}
-
-function createEvent(data) {
-  const sheet = SS.getSheetByName("Events");
-  if (!sheet) return res({ status: "error", message: "Sheet Events tidak ditemukan" });
 
   const rows = sheet.getDataRange().getValues();
   const headers = rows[0];
@@ -4234,19 +4483,9 @@ function getSettings() {
   if (!sheet) return res({});
   const rows = sheet.getDataRange().getValues();
   const settings = {};
-  const seenKeys = new Set();
-  // Iterasi dari BAWAH ke ATAS agar nilai terbaru (yang biasanya di bawah)
-  // yang menang bila ada duplikat key
-  for (let i = rows.length - 1; i >= 0; i--) {
-    const key = rows[i][0];
-    if (!key) continue;
-    const normalizedKey = String(key).trim();
-    if (!normalizedKey || seenKeys.has(normalizedKey.toLowerCase())) continue;
-    seenKeys.add(normalizedKey.toLowerCase());
-    let value = rows[i][1];
-    if (typeof value === 'string') value = value.trim();
-    settings[normalizedKey] = value;
-  }
+  rows.forEach(r => {
+    if (r[0]) settings[r[0]] = r[1];
+  });
   return res(settings);
 }
 
@@ -5154,7 +5393,7 @@ function createTournament(data) {
         const leaderboardResponse = getLeaderboard();
         leaderboardPayload =
           leaderboardResponse &&
-          typeof leaderboardResponse.getContent === 'function'
+            typeof leaderboardResponse.getContent === 'function'
             ? JSON.parse(leaderboardResponse.getContent())
             : leaderboardResponse;
       } catch (leaderboardError) {
@@ -5359,8 +5598,8 @@ function createTournament(data) {
       const randomizeRes = challongeFetch(
         'post',
         '/tournaments/' +
-          tournamentId +
-          '/participants/randomize.json'
+        tournamentId +
+        '/participants/randomize.json'
       );
 
       if (randomizeRes.__error) {
@@ -5564,9 +5803,9 @@ function createTournament(data) {
 
     Logger.log(
       '[GENERATE BRACKET STATUS] eventId=' +
-        eventId +
-        ' tournament_status=' +
-        readBackValue
+      eventId +
+      ' tournament_status=' +
+      readBackValue
     );
 
     if (
