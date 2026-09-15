@@ -1949,9 +1949,39 @@ function createDeck(data) {
     if (!validatePart(ratchet, 'RATCHET', ['ALL', 'CX'])) return res({ status: 'error', message: 'Ratchet tidak valid untuk CX' });
     if (!validatePart(bit, 'BIT', ['ALL', 'CX'])) return res({ status: 'error', message: 'Bit tidak valid untuk CX' });
   } else {
-    if (!validatePart(blade, 'BLADE', [system])) return res({ status: 'error', message: 'Blade tidak valid untuk ' + system });
-    if (!validatePart(ratchet, 'RATCHET', ['ALL', system])) return res({ status: 'error', message: 'Ratchet tidak valid untuk ' + system });
-    if (!validatePart(bit, 'BIT', ['ALL', system])) return res({ status: 'error', message: 'Bit tidak valid untuk ' + system });
+    if (!validatePart(blade, 'BLADE', [system])) return res({
+    status: 'error',
+    message: 'Blade tidak valid untuk ' + system
+  });
+
+  const bladePart = partsMap[blade];
+
+  const bladeIntegratedRatchet =
+    String(bladePart?.integratedRatchet ?? false).toLowerCase() === 'true';
+
+  const bladeIntegratedRatchetBit =
+    String(bladePart?.integratedRatchetBit ?? false).toLowerCase() === 'true';
+
+  // Ratchet manual hanya divalidasi jika Blade
+  // tidak memiliki Ratchet bawaan.
+  if (!bladeIntegratedRatchet && !bladeIntegratedRatchetBit) {
+    if (!validatePart(ratchet, 'RATCHET', ['ALL', system])) return res({
+      status: 'error',
+      message: 'Ratchet tidak valid untuk ' + system
+    });
+  } else if (ratchet) {
+    return res({
+      status: 'error',
+      message: 'Blade ini sudah memiliki Ratchet bawaan'
+    });
+  }
+
+  // Jika Blade tidak memiliki Ratchet+Bit bawaan,
+  // Bit tetap harus valid.
+  if (!validatePart(bit, 'BIT', ['ALL', system])) return res({
+    status: 'error',
+    message: 'Bit tidak valid untuk ' + system
+  });
   }
 
   const isActive = String(data.isActive || '').toLowerCase().trim() !== 'false';
@@ -2136,9 +2166,39 @@ function updateDeck(data) {
     if (!validatePart(ratchet, 'RATCHET', ['ALL', 'CX'])) return res({ status: 'error', message: 'Ratchet tidak valid untuk CX' });
     if (!validatePart(bit, 'BIT', ['ALL', 'CX'])) return res({ status: 'error', message: 'Bit tidak valid untuk CX' });
   } else {
-    if (!validatePart(blade, 'BLADE', [system])) return res({ status: 'error', message: 'Blade tidak valid untuk ' + system });
-    if (!validatePart(ratchet, 'RATCHET', ['ALL', system])) return res({ status: 'error', message: 'Ratchet tidak valid untuk ' + system });
-    if (!validatePart(bit, 'BIT', ['ALL', system])) return res({ status: 'error', message: 'Bit tidak valid untuk ' + system });
+    if (!validatePart(blade, 'BLADE', [system])) return res({
+    status: 'error',
+    message: 'Blade tidak valid untuk ' + system
+  });
+
+  const bladePart = partsMap[blade];
+
+  const bladeIntegratedRatchet =
+    String(bladePart?.integratedRatchet ?? false).toLowerCase() === 'true';
+
+  const bladeIntegratedRatchetBit =
+    String(bladePart?.integratedRatchetBit ?? false).toLowerCase() === 'true';
+
+  // Ratchet manual hanya divalidasi jika Blade
+  // tidak memiliki Ratchet bawaan.
+  if (!bladeIntegratedRatchet && !bladeIntegratedRatchetBit) {
+    if (!validatePart(ratchet, 'RATCHET', ['ALL', system])) return res({
+      status: 'error',
+      message: 'Ratchet tidak valid untuk ' + system
+    });
+  } else if (ratchet) {
+    return res({
+      status: 'error',
+      message: 'Blade ini sudah memiliki Ratchet bawaan'
+    });
+  }
+
+  // Jika Blade tidak memiliki Ratchet+Bit bawaan,
+  // Bit tetap harus valid.
+  if (!validatePart(bit, 'BIT', ['ALL', system])) return res({
+    status: 'error',
+    message: 'Bit tidak valid untuk ' + system
+  });
   }
 
   Logger.log('[DECK UPDATE PARTS]', {
