@@ -41,7 +41,10 @@ export default function PublicNavbar({ onGoogleLogin }) {
   const isAdmin = String(currentPlayer?.role || user?.role || '').trim().toLowerCase() === 'admin';
 
   return (
-    <nav className="fixed top-0 left-0 right-0 z-50 transition-all duration-500 bg-gray-950/90 backdrop-blur-xl border-b border-white/5 shadow-2xl">
+    <nav
+      className="fixed top-0 left-0 right-0 z-50 transition-all duration-500 bg-gray-950/90 backdrop-blur-xl border-b border-white/5 shadow-2xl"
+      style={{ paddingTop: 'env(safe-area-inset-top)' }}
+    >
       <div className="w-full max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <button
