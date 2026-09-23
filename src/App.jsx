@@ -478,7 +478,7 @@ export default function App() {
   const handleCreateProfile = async () => {
     if (newNickname.length < 3 || newNickname.length > 20) return toast.error('Nickname: 3 - 20 karakter!');
     setIsSubmitting(true);
-    const checkRes = await getFromGas(`checkNickname&nickname=${newNickname}`);
+    const checkRes = await getFromGas('checkNickname', true, { nickname: newNickname });
     if (!checkRes?.available) {
       setIsSubmitting(false);
       return toast.error('Nickname sudah digunakan!');
