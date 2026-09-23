@@ -875,7 +875,7 @@ export default function LandingPage({ leaderboard = [], currentEvent = null, isL
               </div>
 
               <motion.a
-                href="#"
+                href="https://chat.whatsapp.com/KI04dGXuhnvL2CrrhnwFDs?s=cl&p=a&ilr=0"
                 target="_blank"
                 rel="noopener noreferrer"
                 whileHover={{ scale: 1.05 }}
